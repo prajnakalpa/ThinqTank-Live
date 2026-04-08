@@ -2,18 +2,30 @@ import Link from 'next/link'
 
 export default function Footer() {
   return (
-    <footer className="border-t border-white/[0.06] mt-20 py-10">
-      <div className="page-container flex flex-col md:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-brand-600 rounded-md flex items-center justify-center">
-            <span className="font-display font-black text-xs text-white">TQ</span>
+    <footer style={{ borderTop: '1px solid rgba(148,163,184,0.06)', marginTop: '5rem', padding: '2.5rem 0' }}>
+      <div className="page-container" style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
+        <div className="glow-line" style={{ width: '100%', maxWidth: 400 }} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 16, paddingTop: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: 8,
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 11, color: '#fff',
+            }}>TQ</div>
+            <span style={{ color: '#475569', fontSize: '0.875rem' }}>
+              ThinqTank Live © {new Date().getFullYear()}
+            </span>
           </div>
-          <span className="text-gray-500 text-sm font-body">ThinqTank Live © {new Date().getFullYear()}</span>
-        </div>
-        <div className="flex gap-6 text-sm text-gray-500">
-          <Link href="/live" className="hover:text-white transition-colors">Live</Link>
-          <Link href="/leaderboard" className="hover:text-white transition-colors">Leaderboard</Link>
-          <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
+          <div style={{ display: 'flex', gap: 24 }}>
+            {[['Live', '/live'], ['Leaderboard', '/leaderboard'], ['Contact', '/contact']].map(([label, href]) => (
+              <Link key={href} href={href} style={{ color: '#475569', fontSize: '0.875rem', textDecoration: 'none', transition: 'color 0.2s' }}
+                onMouseEnter={e => (e.target as HTMLElement).style.color = '#94a3b8'}
+                onMouseLeave={e => (e.target as HTMLElement).style.color = '#475569'}>
+                {label}
+              </Link>
+            ))}
+          </div>
         </div>
       </div>
     </footer>
