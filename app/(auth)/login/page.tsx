@@ -1,110 +1,129 @@
-import { createClient } from '@/lib/supabase/server'
+'use client'
+import { useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
-async function getCMSContent() {
-  const supabase = createClient()
-  const { data } = await supabase.from('site_content').select('key, value')
-  return Object.fromEntries((data ?? []).map(({ key, value }) => [key, value]))
-}
+export default function LoginPage() {
+  const [email, setEmail]       = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading]   = useState(false)
+  const [step, setStep]         = useState<'email' | 'otp'>('email')
+  const [otp, setOtp]           = useState('')
+  const [error, setError]       = useState('')
+  const [usePassword, setUsePassword] = useState(false)
+  const router       = useRouter()
+  const searchParams = useSearchParams()
+  const redirect     = searchParams.get('redirect') || '/live'
+  const supabase     = createClient()
 
-async function getStats() {
-  const supabase = createClient()
-  const [{ count: quizzes }, { count: students }] = await Promise.all([
-    supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
-  ])
-  return { quizzes: quizzes ?? 0, students: students ?? 0 }
-}
+  const handleEmailSubmit = async () => {
+    setError(''); setLoading(true)
+    if (usePassword) {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) setError(error.message)
+      else { router.push(redirect); router.refresh() }
+    } else {
+      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })
+      if (error) setError(error.message)
+      else setStep('otp')
+    }
+    setLoading(false)
+  }
 
-export default async function HomePage() {
-  const [cms, stats] = await Promise.all([getCMSContent(), getStats()])
+  const handleOTPVerify = async () => {
+    setError(''); setLoading(true)
+    const { error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' })
+    if (error) { setError(error.message); setLoading(false); return }
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      await supabase.from('users').upsert({ id: user.id, email: user.email! }, { onConflict: 'id', ignoreDuplicates: true })
+    }
+    router.push(redirect); router.refresh()
+    setLoading(false)
+  }
 
   return (
-    <div className="relative overflow-hidden">
-      {/* Ambient glow */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-brand-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute top-40 right-0 w-[400px] h-[400px] bg-accent-500/5 rounded-full blur-[100px] pointer-events-none" />
+    <div style={{
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: '#020617', padding: '1rem', position: 'relative', overflow: 'hidden',
+    }}>
+      {/* BG glow */}
+      <div style={{ position: 'absolute', top: '-20%', left: '50%', transform: 'translateX(-50%)', width: 600, height: 500, background: 'radial-gradient(ellipse, rgba(99,102,241,0.1) 0%, transparent 70%)', pointerEvents: 'none' }} />
 
-      {/* Hero */}
-      <section className="page-container pt-24 pb-20 text-center relative">
-        <div className="inline-flex items-center gap-2 glass px-4 py-2 rounded-full text-sm text-brand-300 mb-8 animate-fade-in">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse-slow" />
-          Live quizzes every week
-        </div>
+      <div style={{ width: '100%', maxWidth: 400, position: 'relative' }}>
+        {/* Logo */}
+        <Link href="/" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, textDecoration: 'none', marginBottom: 32 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 14, color: '#fff', boxShadow: '0 4px 16px rgba(99,102,241,0.4)' }}>TQ</div>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.1rem', color: '#f1f5f9' }}>ThinqTank <span style={{ color: '#818cf8' }}>Live</span></span>
+        </Link>
 
-        <h1 className="font-display font-extrabold text-5xl md:text-7xl leading-[1.05] mb-6 animate-fade-up">
-          {cms.hero_title?.split(' ').map((word: string, i: number) => (
-            <span key={i} className={i > 1 ? 'gradient-text' : ''}>{word} </span>
-          ))}
-        </h1>
+        {/* Card */}
+        <div style={{
+          background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
+          borderRadius: 20, padding: '2rem', backdropFilter: 'blur(20px)',
+        }}>
+          {/* Top accent */}
+          <div style={{ height: 2, background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #3b82f6)', borderRadius: 99, marginBottom: 24 }} />
 
-        <p className="text-gray-400 text-lg md:text-xl max-w-2xl mx-auto mb-10 font-body animate-fade-up animate-delay-100">
-          {cms.hero_subtitle}
-        </p>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.4rem', color: '#f1f5f9', marginBottom: 6 }}>
+            {step === 'otp' ? 'Check your email' : 'Sign in'}
+          </h2>
+          <p style={{ color: '#475569', fontSize: '0.875rem', marginBottom: 24 }}>
+            {step === 'otp' ? `We sent a code to ${email}` : 'New here? An account is created automatically.'}
+          </p>
 
-        <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-up animate-delay-200">
-          <Link href="/live" className="btn-primary text-base px-8 py-4">
-            {cms.hero_cta || 'Join Now'} →
-          </Link>
-          <Link href="/leaderboard" className="btn-ghost text-base px-8 py-4">
-            View Leaderboard
-          </Link>
-        </div>
-
-        {/* Stats strip */}
-        <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto animate-fade-up animate-delay-300">
-          {[
-            { label: 'Quizzes Run', value: stats.quizzes },
-            { label: 'Students', value: stats.students },
-            { label: 'Weekly Prizes', value: '🏆' },
-            { label: 'Live Every', value: 'Week' },
-          ].map(({ label, value }) => (
-            <div key={label} className="glass rounded-xl p-4">
-              <div className="font-display font-bold text-2xl text-white">{value}</div>
-              <div className="text-gray-500 text-sm mt-1">{label}</div>
+          {step === 'email' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div>
+                <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleEmailSubmit()}
+                  placeholder="you@example.com" className="input-field" autoFocus />
+              </div>
+              {usePassword && (
+                <div>
+                  <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Password</label>
+                  <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleEmailSubmit()}
+                    placeholder="••••••••" className="input-field" />
+                </div>
+              )}
+              {error && <p style={{ color: '#f87171', fontSize: '0.85rem', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '8px 12px' }}>{error}</p>}
+              <button onClick={handleEmailSubmit} disabled={!email || loading} className="btn-primary" style={{ width: '100%', padding: '12px', marginTop: 4 }}>
+                {loading ? 'Sending…' : usePassword ? 'Sign In' : 'Send Code'}
+              </button>
+              <button onClick={() => setUsePassword(!usePassword)} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
+                {usePassword ? '← Use email OTP (students)' : 'Admin? Sign in with password →'}
+              </button>
             </div>
-          ))}
-        </div>
-      </section>
+          )}
 
-      {/* About */}
-      <section className="page-container py-16">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="section-title mb-4">What is ThinqTank Live?</h2>
-          <p className="text-gray-400 text-lg font-body leading-relaxed">{cms.about_text}</p>
-        </div>
-      </section>
-
-      {/* Feature cards */}
-      <section className="page-container py-10 pb-20">
-        <div className="grid md:grid-cols-3 gap-6">
-          {[
-            {
-              icon: '⚡',
-              title: 'Weekly Live Quizzes',
-              desc: 'Timed, competitive quizzes every week. Resume anytime before the deadline.'
-            },
-            {
-              icon: '🏆',
-              title: 'Real-Time Leaderboard',
-              desc: 'Rankings update instantly. Climb the weekly and all-time boards.'
-            },
-            {
-              icon: '🎯',
-              title: 'Smart Scoring',
-              desc: 'Keyword + fuzzy match evaluation. Partial credit for close answers.'
-            },
-          ].map(({ icon, title, desc }) => (
-            <div key={title} className="card-hover group">
-              <div className="text-3xl mb-4">{icon}</div>
-              <h3 className="font-display font-bold text-lg text-white mb-2 group-hover:text-brand-300 transition-colors">
-                {title}
-              </h3>
-              <p className="text-gray-500 text-sm leading-relaxed">{desc}</p>
+          {step === 'otp' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div>
+                <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>6-digit code</label>
+                <input type="text" value={otp}
+                  onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  onKeyDown={e => e.key === 'Enter' && handleOTPVerify()}
+                  placeholder="000000" autoFocus
+                  style={{
+                    width: '100%', background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(148,163,184,0.12)',
+                    borderRadius: 12, padding: '14px 16px', color: '#f1f5f9', fontSize: '1.6rem',
+                    textAlign: 'center', letterSpacing: '0.4em', fontFamily: 'monospace', outline: 'none',
+                  }} />
+              </div>
+              {error && <p style={{ color: '#f87171', fontSize: '0.85rem', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '8px 12px' }}>{error}</p>}
+              <button onClick={handleOTPVerify} disabled={otp.length < 6 || loading} className="btn-primary" style={{ width: '100%', padding: '12px' }}>
+                {loading ? 'Verifying…' : 'Verify & Continue →'}
+              </button>
+              <button onClick={() => { setStep('email'); setOtp(''); setError('') }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
+                ← Back
+              </button>
             </div>
-          ))}
+          )}
         </div>
-      </section>
+      </div>
     </div>
   )
 }
