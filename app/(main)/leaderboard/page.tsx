@@ -1,110 +1,195 @@
 import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
+import { formatDuration } from '@/lib/quiz-state'
 
-async function getCMSContent() {
+async function getData(quizId?: string) {
   const supabase = createClient()
-  const { data } = await supabase.from('site_content').select('key, value')
-  return Object.fromEntries((data ?? []).map(({ key, value }) => [key, value]))
-}
-
-async function getStats() {
-  const supabase = createClient()
-  const [{ count: quizzes }, { count: students }] = await Promise.all([
-    supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
+  const [{ data: activities }, leaderboardRes] = await Promise.all([
+    supabase.from('activities').select('id, title, status').not('status', 'eq', 'archived').order('created_at', { ascending: false }),
+    quizId
+      ? supabase.from('leaderboard').select('*').eq('activity_id', quizId).order('rank')
+      : supabase.from('leaderboard').select('*').order('score', { ascending: false }).limit(50)
   ])
-  return { quizzes: quizzes ?? 0, students: students ?? 0 }
+  return { activities: activities ?? [], entries: leaderboardRes.data ?? [] }
 }
 
-export default async function HomePage() {
-  const [cms, stats] = await Promise.all([getCMSContent(), getStats()])
+const rankColors = ['#f59e0b', '#94a3b8', '#cd7c3a']
+const rankLabels = ['🥇', '🥈', '🥉']
+
+export default async function LeaderboardPage({ searchParams }: { searchParams: { quiz?: string } }) {
+  const quizId = searchParams.quiz
+  const { activities, entries } = await getData(quizId)
+
+  const overallMap: Record<string, { username: string; total: number; quizzes: number }> = {}
+  if (!quizId) {
+    for (const e of entries) {
+      if (!overallMap[e.user_id]) overallMap[e.user_id] = { username: e.username, total: 0, quizzes: 0 }
+      overallMap[e.user_id].total += e.score
+      overallMap[e.user_id].quizzes += 1
+    }
+  }
+  const overall = Object.entries(overallMap).sort((a, b) => b[1].total - a[1].total).slice(0, 50)
+  const selectedActivity = activities.find(a => a.id === quizId)
 
   return (
-    <div className="relative overflow-hidden">
-      {/* Ambient glow */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-brand-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute top-40 right-0 w-[400px] h-[400px] bg-accent-500/5 rounded-full blur-[100px] pointer-events-none" />
+    <div style={{ padding: '6rem 0 4rem' }}>
+      <div className="page-container">
 
-      {/* Hero */}
-      <section className="page-container pt-24 pb-20 text-center relative">
-        <div className="inline-flex items-center gap-2 glass px-4 py-2 rounded-full text-sm text-brand-300 mb-8 animate-fade-in">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse-slow" />
-          Live quizzes every week
+        {/* Header */}
+        <div style={{ marginBottom: '2.5rem' }}>
+          <p style={{ color: '#f59e0b', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>RANKINGS</p>
+          <h1 className="section-title" style={{ fontSize: 'clamp(1.8rem, 4vw, 2.8rem)', marginBottom: 8 }}>Leaderboard</h1>
+          <p style={{ color: '#475569' }}>Top performers, updated in real time.</p>
         </div>
 
-        <h1 className="font-display font-extrabold text-5xl md:text-7xl leading-[1.05] mb-6 animate-fade-up">
-          {cms.hero_title?.split(' ').map((word: string, i: number) => (
-            <span key={i} className={i > 1 ? 'gradient-text' : ''}>{word} </span>
+        {/* Filter tabs */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: '2rem', overflowX: 'auto', paddingBottom: 4 }}>
+          {[{ id: '', title: 'Overall' }, ...activities].map((a: any) => {
+            const active = (quizId ?? '') === a.id
+            return (
+              <a key={a.id} href={a.id ? `/leaderboard?quiz=${a.id}` : '/leaderboard'} style={{
+                padding: '7px 16px', borderRadius: 10, fontSize: '0.82rem', fontWeight: 500,
+                textDecoration: 'none', transition: 'all 0.2s', whiteSpace: 'nowrap',
+                color: active ? '#e2e8f0' : '#64748b',
+                background: active ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.03)',
+                border: active ? '1px solid rgba(139,92,246,0.3)' : '1px solid rgba(148,163,184,0.08)',
+              }}>{a.title}</a>
+            )
+          })}
+        </div>
+
+        {/* Top 3 podium for quiz view */}
+        {quizId && entries.length >= 3 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: '2rem', maxWidth: 560, margin: '0 auto 2rem' }}>
+            {[1, 0, 2].map(pos => {
+              const e = entries[pos]
+              if (!e) return null
+              const rank = pos + 1
+              return (
+                <div key={e.id} style={{
+                  background: 'rgba(255,255,255,0.03)', border: `1px solid ${rankColors[pos]}30`,
+                  borderRadius: 16, padding: '1.25rem 0.75rem', textAlign: 'center',
+                  order: pos === 0 ? 1 : pos === 1 ? 0 : 2,
+                  paddingTop: pos === 0 ? '1.75rem' : '1rem',
+                }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: 8 }}>{rankLabels[pos]}</div>
+                  <div style={{
+                    width: 40, height: 40, borderRadius: '50%', margin: '0 auto 8px',
+                    background: `${rankColors[pos]}20`, border: `2px solid ${rankColors[pos]}40`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: '1rem', color: rankColors[pos],
+                  }}>{e.username?.[0]?.toUpperCase()}</div>
+                  <div style={{ color: '#e2e8f0', fontSize: '0.8rem', fontWeight: 600, marginBottom: 4 }}>{e.username}</div>
+                  <div style={{ color: rankColors[pos], fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.1rem' }}>{e.score}</div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Table */}
+        {quizId ? (
+          <RankTable entries={entries} showTime title={selectedActivity?.title} />
+        ) : (
+          <OverallTable entries={overall} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RankTable({ entries, showTime, title }: { entries: any[]; showTime?: boolean; title?: string }) {
+  if (!entries.length) return <EmptyState />
+  return (
+    <div>
+      {title && <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, color: '#e2e8f0', marginBottom: 16, fontSize: '1.1rem' }}>{title} Rankings</h2>}
+      <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.08)', background: 'rgba(255,255,255,0.02)' }}>
+              {['Rank', 'Player', 'Score', ...(showTime ? ['Time'] : [])].map(h => (
+                <th key={h} style={{ padding: '12px 20px', textAlign: h === 'Score' || h === 'Time' ? 'right' : 'left', fontSize: '0.72rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e, i) => (
+              <tr key={e.id} style={{ borderBottom: '1px solid rgba(148,163,184,0.04)', transition: 'background 0.15s', background: i < 3 ? `${rankColors[i]}05` : 'transparent' }}>
+                <td style={{ padding: '14px 20px' }}>
+                  <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.1rem', color: i < 3 ? rankColors[i] : '#475569' }}>
+                    {i < 3 ? rankLabels[i] : `#${e.rank ?? i + 1}`}
+                  </span>
+                </td>
+                <td style={{ padding: '14px 20px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: '50%',
+                      background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.2)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '0.8rem', color: '#818cf8',
+                    }}>{e.username?.[0]?.toUpperCase() ?? '?'}</div>
+                    <span style={{ color: '#e2e8f0', fontSize: '0.9rem' }}>{e.username ?? 'Anonymous'}</span>
+                  </div>
+                </td>
+                <td style={{ padding: '14px 20px', textAlign: 'right' }}>
+                  <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: '#f59e0b', fontSize: '1rem' }}>{e.score}</span>
+                </td>
+                {showTime && (
+                  <td style={{ padding: '14px 20px', textAlign: 'right', color: '#475569', fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                    {e.time_taken_seconds ? formatDuration(e.time_taken_seconds) : '—'}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function OverallTable({ entries }: { entries: [string, { username: string; total: number; quizzes: number }][] }) {
+  if (!entries.length) return <EmptyState />
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.08)', background: 'rgba(255,255,255,0.02)' }}>
+            {['Rank', 'Player', 'Total Score', 'Quizzes'].map(h => (
+              <th key={h} style={{ padding: '12px 20px', textAlign: h !== 'Rank' && h !== 'Player' ? 'right' : 'left', fontSize: '0.72rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(([uid, data], i) => (
+            <tr key={uid} style={{ borderBottom: '1px solid rgba(148,163,184,0.04)', background: i < 3 ? `${rankColors[i]}05` : 'transparent' }}>
+              <td style={{ padding: '14px 20px' }}>
+                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.1rem', color: i < 3 ? rankColors[i] : '#475569' }}>
+                  {i < 3 ? rankLabels[i] : `#${i + 1}`}
+                </span>
+              </td>
+              <td style={{ padding: '14px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '0.8rem', color: '#818cf8' }}>
+                    {data.username?.[0]?.toUpperCase() ?? '?'}
+                  </div>
+                  <span style={{ color: '#e2e8f0', fontSize: '0.9rem' }}>{data.username ?? 'Anonymous'}</span>
+                </div>
+              </td>
+              <td style={{ padding: '14px 20px', textAlign: 'right', fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: '#f59e0b', fontSize: '1rem' }}>{data.total}</td>
+              <td style={{ padding: '14px 20px', textAlign: 'right', color: '#475569', fontSize: '0.85rem' }}>{data.quizzes}</td>
+            </tr>
           ))}
-        </h1>
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
-        <p className="text-gray-400 text-lg md:text-xl max-w-2xl mx-auto mb-10 font-body animate-fade-up animate-delay-100">
-          {cms.hero_subtitle}
-        </p>
-
-        <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-up animate-delay-200">
-          <Link href="/live" className="btn-primary text-base px-8 py-4">
-            {cms.hero_cta || 'Join Now'} →
-          </Link>
-          <Link href="/leaderboard" className="btn-ghost text-base px-8 py-4">
-            View Leaderboard
-          </Link>
-        </div>
-
-        {/* Stats strip */}
-        <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto animate-fade-up animate-delay-300">
-          {[
-            { label: 'Quizzes Run', value: stats.quizzes },
-            { label: 'Students', value: stats.students },
-            { label: 'Weekly Prizes', value: '🏆' },
-            { label: 'Live Every', value: 'Week' },
-          ].map(({ label, value }) => (
-            <div key={label} className="glass rounded-xl p-4">
-              <div className="font-display font-bold text-2xl text-white">{value}</div>
-              <div className="text-gray-500 text-sm mt-1">{label}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* About */}
-      <section className="page-container py-16">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="section-title mb-4">What is ThinqTank Live?</h2>
-          <p className="text-gray-400 text-lg font-body leading-relaxed">{cms.about_text}</p>
-        </div>
-      </section>
-
-      {/* Feature cards */}
-      <section className="page-container py-10 pb-20">
-        <div className="grid md:grid-cols-3 gap-6">
-          {[
-            {
-              icon: '⚡',
-              title: 'Weekly Live Quizzes',
-              desc: 'Timed, competitive quizzes every week. Resume anytime before the deadline.'
-            },
-            {
-              icon: '🏆',
-              title: 'Real-Time Leaderboard',
-              desc: 'Rankings update instantly. Climb the weekly and all-time boards.'
-            },
-            {
-              icon: '🎯',
-              title: 'Smart Scoring',
-              desc: 'Keyword + fuzzy match evaluation. Partial credit for close answers.'
-            },
-          ].map(({ icon, title, desc }) => (
-            <div key={title} className="card-hover group">
-              <div className="text-3xl mb-4">{icon}</div>
-              <h3 className="font-display font-bold text-lg text-white mb-2 group-hover:text-brand-300 transition-colors">
-                {title}
-              </h3>
-              <p className="text-gray-500 text-sm leading-relaxed">{desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+function EmptyState() {
+  return (
+    <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
+      <div style={{ fontSize: '3rem', marginBottom: 12 }}>🏆</div>
+      <p style={{ color: '#475569' }}>No results yet. Be the first to compete!</p>
     </div>
   )
 }
