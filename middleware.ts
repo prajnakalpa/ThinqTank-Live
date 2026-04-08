@@ -9,12 +9,14 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll: () => request.cookies.getAll(),
-        setAll: (cookiesToSet) => {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set(name, value)
-            response.cookies.set(name, value, options)
-          })
+        get: (name: string) => request.cookies.get(name)?.value,
+        set: (name: string, value: string, options: any) => {
+          request.cookies.set(name, value)
+          response.cookies.set(name, value, options)
+        },
+        remove: (name: string, options: any) => {
+          request.cookies.set(name, '')
+          response.cookies.set(name, '', options)
         },
       },
     }
@@ -25,7 +27,9 @@ export async function middleware(request: NextRequest) {
 
   // Protect /admin routes
   if (path.startsWith('/admin')) {
-    if (!user) return NextResponse.redirect(new URL('/login?redirect=/admin', request.url))
+    if (!user) {
+      return NextResponse.redirect(new URL('/login?redirect=/admin', request.url))
+    }
 
     const { data: profile } = await supabase
       .from('users')
@@ -40,7 +44,9 @@ export async function middleware(request: NextRequest) {
 
   // Protect /quiz routes
   if (path.startsWith('/quiz')) {
-    if (!user) return NextResponse.redirect(new URL('/login?redirect=' + path, request.url))
+    if (!user) {
+      return NextResponse.redirect(new URL('/login?redirect=' + path, request.url))
+    }
   }
 
   return response
