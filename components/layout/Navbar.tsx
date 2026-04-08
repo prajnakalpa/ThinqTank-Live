@@ -3,23 +3,29 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { cn } from '@/lib/utils'
 
 const NAV_LINKS = [
-  { href: '/', label: 'Home' },
-  { href: '/live', label: 'Live' },
-  { href: '/leaderboard', label: 'Leaderboard' },
+  { href: '/',              label: 'Home' },
+  { href: '/live',          label: 'Live' },
+  { href: '/leaderboard',   label: 'Leaderboard' },
   { href: '/announcements', label: 'Announcements' },
-  { href: '/contact', label: 'Contact' },
+  { href: '/contact',       label: 'Contact' },
 ]
 
 export default function Navbar() {
-  const path = usePathname()
-  const router = useRouter()
-  const [user, setUser] = useState<any>(null)
+  const path     = usePathname()
+  const router   = useRouter()
+  const [user, setUser]       = useState<any>(null)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [open, setOpen] = useState(false)
+  const [open, setOpen]       = useState(false)
+  const [scrolled, setScrolled] = useState(false)
   const supabase = createClient()
+
+  useEffect(() => {
+    const handleScroll = () => setScrolled(window.scrollY > 20)
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -42,88 +48,106 @@ export default function Navbar() {
   }
 
   return (
-    <nav className="fixed top-0 inset-x-0 z-50 bg-dark-900/80 backdrop-blur-xl border-b border-white/[0.06]">
-      <div className="page-container flex items-center justify-between h-16">
+    <nav style={{
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50,
+      transition: 'all 0.3s',
+      background: scrolled ? 'rgba(2,6,23,0.85)' : 'transparent',
+      backdropFilter: scrolled ? 'blur(20px)' : 'none',
+      borderBottom: scrolled ? '1px solid rgba(148,163,184,0.08)' : '1px solid transparent',
+    }}>
+      <div className="page-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px' }}>
+
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center glow-brand">
-            <span className="font-display font-black text-sm text-white">TQ</span>
-          </div>
-          <span className="font-display font-bold text-white hidden sm:block">
-            ThinqTank <span className="text-brand-400">Live</span>
+        <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}>
+          <div style={{
+            width: 34, height: 34, borderRadius: 10,
+            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 16px rgba(99,102,241,0.4)',
+            fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 13, color: '#fff',
+          }}>TQ</div>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1rem', color: '#f1f5f9' }}>
+            ThinqTank <span style={{ color: '#818cf8' }}>Live</span>
           </span>
         </Link>
 
-        {/* Desktop nav */}
-        <div className="hidden md:flex items-center gap-1">
-          {NAV_LINKS.map(({ href, label }) => (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                'px-4 py-2 rounded-lg text-sm font-body transition-all duration-200',
-                path === href
-                  ? 'text-white bg-brand-600/20 border border-brand-500/30'
-                  : 'text-gray-400 hover:text-white hover:bg-white/5'
-              )}
-            >
-              {label}
-            </Link>
-          ))}
+        {/* Desktop links */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} className="hidden md:flex">
+          {NAV_LINKS.map(({ href, label }) => {
+            const active = path === href
+            return (
+              <Link key={href} href={href} style={{
+                padding: '6px 14px', borderRadius: 8, fontSize: '0.875rem', fontWeight: 500,
+                textDecoration: 'none', transition: 'all 0.2s',
+                color: active ? '#e2e8f0' : '#64748b',
+                background: active ? 'rgba(139,92,246,0.12)' : 'transparent',
+                border: active ? '1px solid rgba(139,92,246,0.25)' : '1px solid transparent',
+              }}
+              onMouseEnter={e => { if (!active) { (e.target as HTMLElement).style.color = '#cbd5e1'; (e.target as HTMLElement).style.background = 'rgba(255,255,255,0.04)' } }}
+              onMouseLeave={e => { if (!active) { (e.target as HTMLElement).style.color = '#64748b'; (e.target as HTMLElement).style.background = 'transparent' } }}
+              >{label}</Link>
+            )
+          })}
         </div>
 
-        {/* Right actions */}
-        <div className="flex items-center gap-3">
+        {/* Right */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {isAdmin && (
-            <Link href="/admin" className="btn-ghost text-sm py-2 px-4 hidden md:block">
-              Admin
-            </Link>
+            <Link href="/admin" className="hidden md:block" style={{
+              padding: '6px 14px', borderRadius: 8, fontSize: '0.8rem', fontWeight: 600,
+              color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)',
+              background: 'rgba(167,139,250,0.08)', textDecoration: 'none', transition: 'all 0.2s',
+            }}>Admin</Link>
           )}
           {user ? (
-            <button onClick={handleSignOut} className="btn-primary text-sm py-2 px-4">
+            <button onClick={handleSignOut} className="btn-ghost" style={{ padding: '6px 16px', fontSize: '0.875rem' }}>
               Sign Out
             </button>
           ) : (
-            <Link href="/login" className="btn-primary text-sm py-2 px-4">
+            <Link href="/login" className="btn-primary" style={{ padding: '7px 18px' }}>
               Sign In
             </Link>
           )}
+
           {/* Mobile hamburger */}
-          <button
-            onClick={() => setOpen(!open)}
-            className="md:hidden p-2 text-gray-400 hover:text-white"
-          >
-            <span className="sr-only">Menu</span>
-            <div className="w-5 space-y-1">
-              <div className={cn('h-0.5 bg-current transition-all', open && 'rotate-45 translate-y-1.5')} />
-              <div className={cn('h-0.5 bg-current transition-all', open && 'opacity-0')} />
-              <div className={cn('h-0.5 bg-current transition-all', open && '-rotate-45 -translate-y-1.5')} />
-            </div>
+          <button onClick={() => setOpen(!open)} className="md:hidden" style={{
+            background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(148,163,184,0.1)',
+            borderRadius: 8, padding: '8px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4,
+          }}>
+            {[0,1,2].map(i => (
+              <span key={i} style={{
+                display: 'block', width: 18, height: 1.5, background: '#94a3b8', borderRadius: 99,
+                transition: 'all 0.2s',
+                transform: open && i === 0 ? 'rotate(45deg) translateY(5.5px)' :
+                           open && i === 2 ? 'rotate(-45deg) translateY(-5.5px)' : 'none',
+                opacity: open && i === 1 ? 0 : 1,
+              }} />
+            ))}
           </button>
         </div>
       </div>
 
       {/* Mobile menu */}
       {open && (
-        <div className="md:hidden border-t border-white/[0.06] bg-dark-900/95 px-4 py-4 space-y-1">
+        <div style={{
+          borderTop: '1px solid rgba(148,163,184,0.08)',
+          background: 'rgba(2,6,23,0.95)',
+          backdropFilter: 'blur(20px)',
+          padding: '12px 16px 16px',
+        }}>
           {NAV_LINKS.map(({ href, label }) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={() => setOpen(false)}
-              className={cn(
-                'block px-4 py-2.5 rounded-xl text-sm',
-                path === href ? 'text-white bg-brand-600/20' : 'text-gray-400 hover:text-white'
-              )}
-            >
-              {label}
-            </Link>
+            <Link key={href} href={href} onClick={() => setOpen(false)} style={{
+              display: 'block', padding: '10px 14px', borderRadius: 8,
+              color: path === href ? '#e2e8f0' : '#64748b',
+              background: path === href ? 'rgba(139,92,246,0.1)' : 'transparent',
+              textDecoration: 'none', fontSize: '0.9rem', marginBottom: 2,
+            }}>{label}</Link>
           ))}
           {isAdmin && (
-            <Link href="/admin" onClick={() => setOpen(false)}
-              className="block px-4 py-2.5 rounded-xl text-sm text-accent-400">
-              Admin Dashboard
-            </Link>
+            <Link href="/admin" onClick={() => setOpen(false)} style={{
+              display: 'block', padding: '10px 14px', borderRadius: 8,
+              color: '#a78bfa', textDecoration: 'none', fontSize: '0.9rem',
+            }}>Admin Dashboard</Link>
           )}
         </div>
       )}
