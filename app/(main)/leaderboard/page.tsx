@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic'
 
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/client'
 import { formatDuration } from '@/lib/quiz-state'
 
 async function getData(quizId?: string) {
