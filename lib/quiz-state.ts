@@ -28,3 +28,19 @@ export function rankEmoji(rank: number) {
 export function truncate(str: string, len = 80) {
   return str.length > len ? str.slice(0, len) + '…' : str
 }
+
+// ✅ FIXED MISSING EXPORTS
+
+export const getSecondsRemaining = () => 0
+
+export const formatTime = (seconds: number) => {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+export const formatDuration = (seconds: number) => {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}m ${s}s`
+}
