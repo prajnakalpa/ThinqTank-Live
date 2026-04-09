@@ -29,9 +29,19 @@ export function truncate(str: string, len = 80) {
   return str.length > len ? str.slice(0, len) + '…' : str
 }
 
-// ✅ FIXED MISSING EXPORTS
+/* =========================
+   QUIZ TIMER HELPERS
+========================= */
 
-export const getSecondsRemaining = () => 0
+export const getSecondsRemaining = (startTime: string, durationSeconds: number) => {
+  const start = new Date(startTime).getTime()
+  const now = Date.now()
+
+  const elapsed = Math.floor((now - start) / 1000)
+  const remaining = durationSeconds - elapsed
+
+  return remaining > 0 ? remaining : 0
+}
 
 export const formatTime = (seconds: number) => {
   const m = Math.floor(seconds / 60)
