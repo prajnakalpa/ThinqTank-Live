@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic'
 
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
 async function getCMSContent() {
