@@ -1,6 +1,11 @@
+'use client'
+
+import { useState } from 'react'
 import Link from 'next/link'
 
 export default function Footer() {
+  const [hoveredLink, setHoveredLink] = useState<string | null>(null)
+
   return (
     <footer style={{ borderTop: '1px solid rgba(148,163,184,0.06)', marginTop: '5rem', padding: '2.5rem 0' }}>
       <div className="page-container" style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
@@ -19,9 +24,18 @@ export default function Footer() {
           </div>
           <div style={{ display: 'flex', gap: 24 }}>
             {[['Live', '/live'], ['Leaderboard', '/leaderboard'], ['Contact', '/contact']].map(([label, href]) => (
-              <Link key={href} href={href} style={{ color: '#475569', fontSize: '0.875rem', textDecoration: 'none', transition: 'color 0.2s' }}
-                onMouseEnter={e => (e.target as HTMLElement).style.color = '#94a3b8'}
-                onMouseLeave={e => (e.target as HTMLElement).style.color = '#475569'}>
+              <Link
+                key={href}
+                href={href}
+                style={{
+                  color: hoveredLink === href ? '#94a3b8' : '#475569',
+                  fontSize: '0.875rem',
+                  textDecoration: 'none',
+                  transition: 'color 0.2s',
+                }}
+                onMouseEnter={() => setHoveredLink(href)}
+                onMouseLeave={() => setHoveredLink(null)}
+              >
                 {label}
               </Link>
             ))}
