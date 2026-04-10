@@ -1,110 +1,78 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 
-async function getCMSContent() {
+export default async function ActivitiesPage() {
   const supabase = createClient()
-  const { data } = await supabase.from('site_content').select('key, value')
-  return Object.fromEntries((data ?? []).map(({ key, value }) => [key, value]))
-}
+  const { data: activities } = await supabase
+    .from('activities')
+    .select('*, quizzes(duration_minutes, start_time), analytics(*)')
+    .order('created_at', { ascending: false })
 
-async function getStats() {
-  const supabase = createClient()
-  const [{ count: quizzes }, { count: students }] = await Promise.all([
-    supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
-  ])
-  return { quizzes: quizzes ?? 0, students: students ?? 0 }
-}
-
-export default async function HomePage() {
-  const [cms, stats] = await Promise.all([getCMSContent(), getStats()])
+  const ss = (s: string) => ({
+    live:     { color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.2)' },
+    upcoming: { color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.2)' },
+    closed:   { color: '#94a3b8', bg: 'rgba(100,116,139,0.1)', border: 'rgba(100,116,139,0.2)' },
+    archived: { color: '#a78bfa', bg: 'rgba(139,92,246,0.1)',  border: 'rgba(139,92,246,0.2)' },
+  }[s] ?? { color: '#94a3b8', bg: 'rgba(100,116,139,0.1)', border: 'rgba(100,116,139,0.2)' })
 
   return (
-    <div className="relative overflow-hidden">
-      {/* Ambient glow */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-brand-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute top-40 right-0 w-[400px] h-[400px] bg-accent-500/5 rounded-full blur-[100px] pointer-events-none" />
-
-      {/* Hero */}
-      <section className="page-container pt-24 pb-20 text-center relative">
-        <div className="inline-flex items-center gap-2 glass px-4 py-2 rounded-full text-sm text-brand-300 mb-8 animate-fade-in">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse-slow" />
-          Live quizzes every week
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
+        <div>
+          <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.8rem', color: '#f1f5f9', marginBottom: 4 }}>Activities</h1>
+          <p style={{ color: '#475569', fontSize: '0.875rem' }}>Manage all quizzes and events.</p>
         </div>
+        <Link href="/admin/activities/new" className="btn-primary" style={{ textDecoration: 'none', padding: '9px 20px', fontSize: '0.875rem' }}>+ New Activity</Link>
+      </div>
 
-        <h1 className="font-display font-extrabold text-5xl md:text-7xl leading-[1.05] mb-6 animate-fade-up">
-          {cms.hero_title?.split(' ').map((word: string, i: number) => (
-            <span key={i} className={i > 1 ? 'gradient-text' : ''}>{word} </span>
-          ))}
-        </h1>
-
-        <p className="text-gray-400 text-lg md:text-xl max-w-2xl mx-auto mb-10 font-body animate-fade-up animate-delay-100">
-          {cms.hero_subtitle}
-        </p>
-
-        <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-up animate-delay-200">
-          <Link href="/live" className="btn-primary text-base px-8 py-4">
-            {cms.hero_cta || 'Join Now'} →
-          </Link>
-          <Link href="/leaderboard" className="btn-ghost text-base px-8 py-4">
-            View Leaderboard
-          </Link>
+      {!activities?.length ? (
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, padding: '4rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '3rem', marginBottom: 12 }}>⚡</div>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", color: '#e2e8f0', marginBottom: 12 }}>No activities yet</h3>
+          <Link href="/admin/activities/new" className="btn-primary" style={{ textDecoration: 'none', padding: '9px 20px', fontSize: '0.875rem' }}>Create First Quiz</Link>
         </div>
-
-        {/* Stats strip */}
-        <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto animate-fade-up animate-delay-300">
-          {[
-            { label: 'Quizzes Run', value: stats.quizzes },
-            { label: 'Students', value: stats.students },
-            { label: 'Weekly Prizes', value: '🏆' },
-            { label: 'Live Every', value: 'Week' },
-          ].map(({ label, value }) => (
-            <div key={label} className="glass rounded-xl p-4">
-              <div className="font-display font-bold text-2xl text-white">{value}</div>
-              <div className="text-gray-500 text-sm mt-1">{label}</div>
-            </div>
-          ))}
+      ) : (
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+                {['Title', 'Status', 'Duration', 'Participants', ''].map(h => (
+                  <th key={h} style={{ padding: '12px 20px', textAlign: 'left', fontSize: '0.72rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {activities.map((a: any) => {
+                const style = ss(a.status)
+                return (
+                  <tr key={a.id} style={{ borderBottom: '1px solid rgba(148,163,184,0.04)' }}>
+                    <td style={{ padding: '14px 20px' }}>
+                      <div style={{ color: '#e2e8f0', fontSize: '0.9rem' }}>{a.title}</div>
+                      <div style={{ color: '#334155', fontSize: '0.75rem', marginTop: 2 }}>{a.type}</div>
+                    </td>
+                    <td style={{ padding: '14px 20px' }}>
+                      <span style={{ display: 'inline-flex', padding: '2px 10px', borderRadius: 99, fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', background: style.bg, border: `1px solid ${style.border}`, color: style.color }}>{a.status}</span>
+                    </td>
+                    <td style={{ padding: '14px 20px', color: '#64748b', fontSize: '0.85rem', fontFamily: 'monospace' }}>
+                      {a.quizzes?.duration_minutes ? `${a.quizzes.duration_minutes}m` : '—'}
+                    </td>
+                    <td style={{ padding: '14px 20px', color: '#64748b', fontSize: '0.85rem', fontFamily: 'monospace' }}>
+                      {a.analytics?.[0]?.participant_count ?? 0}
+                    </td>
+                    <td style={{ padding: '14px 20px', textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end' }}>
+                        <Link href={`/admin/activities/${a.id}`} style={{ color: '#818cf8', fontSize: '0.8rem', textDecoration: 'none' }}>Edit</Link>
+                        <Link href={`/admin/questions/${a.id}`} style={{ color: '#f59e0b', fontSize: '0.8rem', textDecoration: 'none' }}>Questions</Link>
+                        <Link href={`/admin/submissions/${a.id}`} style={{ color: '#94a3b8', fontSize: '0.8rem', textDecoration: 'none' }}>Submissions</Link>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
-      </section>
-
-      {/* About */}
-      <section className="page-container py-16">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="section-title mb-4">What is ThinqTank Live?</h2>
-          <p className="text-gray-400 text-lg font-body leading-relaxed">{cms.about_text}</p>
-        </div>
-      </section>
-
-      {/* Feature cards */}
-      <section className="page-container py-10 pb-20">
-        <div className="grid md:grid-cols-3 gap-6">
-          {[
-            {
-              icon: '⚡',
-              title: 'Weekly Live Quizzes',
-              desc: 'Timed, competitive quizzes every week. Resume anytime before the deadline.'
-            },
-            {
-              icon: '🏆',
-              title: 'Real-Time Leaderboard',
-              desc: 'Rankings update instantly. Climb the weekly and all-time boards.'
-            },
-            {
-              icon: '🎯',
-              title: 'Smart Scoring',
-              desc: 'Keyword + fuzzy match evaluation. Partial credit for close answers.'
-            },
-          ].map(({ icon, title, desc }) => (
-            <div key={title} className="card-hover group">
-              <div className="text-3xl mb-4">{icon}</div>
-              <h3 className="font-display font-bold text-lg text-white mb-2 group-hover:text-brand-300 transition-colors">
-                {title}
-              </h3>
-              <p className="text-gray-500 text-sm leading-relaxed">{desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+      )}
     </div>
   )
 }
