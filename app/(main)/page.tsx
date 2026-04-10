@@ -1,23 +1,40 @@
-import { createClient } from '@/lib/supabase/server'
+'use client'
+
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { createClient } from '@/lib/supabase/client'
 
-async function getCMSContent() {
-  const supabase = createClient()
-  const { data } = await supabase.from('site_content').select('key, value')
-  return Object.fromEntries((data ?? []).map(({ key, value }) => [key, value]))
-}
+export default function HomePage() {
+  const [cms, setCms] = useState<any>({})
+  const [stats, setStats] = useState({ quizzes: 0, students: 0 })
+  const [loading, setLoading] = useState(true)
 
-async function getStats() {
-  const supabase = createClient()
-  const [{ count: quizzes }, { count: students }] = await Promise.all([
-    supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
-  ])
-  return { quizzes: quizzes ?? 0, students: students ?? 0 }
-}
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const supabase = createClient()
+        
+        // Get CMS content
+        const { data: cmsData } = await supabase.from('site_content').select('key, value')
+        const cmsContent = Object.fromEntries((cmsData ?? []).map(({ key, value }: any) => [key, value]))
+        setCms(cmsContent)
 
-export default async function HomePage() {
-  const [cms, stats] = await Promise.all([getCMSContent(), getStats()])
+        // Get stats
+        const [{ count: quizzes }, { count: students }] = await Promise.all([
+          supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
+          supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
+        ])
+        
+        setStats({ quizzes: quizzes ?? 0, students: students ?? 0 })
+      } catch (error) {
+        console.error('Error loading data:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadData()
+  }, [])
 
   return (
     <div style={{ overflow: 'hidden' }}>
