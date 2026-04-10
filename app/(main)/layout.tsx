@@ -3,9 +3,9 @@ import Footer from '@/components/layout/Footer'
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="noise">
+    <div style={{ minHeight: '100vh' }}>
       <Navbar />
-      <main className="pt-16 min-h-screen">
+      <main style={{ paddingTop: '64px', minHeight: '100vh' }}>
         {children}
       </main>
       <Footer />
