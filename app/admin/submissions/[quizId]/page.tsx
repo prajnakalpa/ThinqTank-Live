@@ -1,110 +1,153 @@
-import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
+'use client'
+import { useState, useEffect } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { formatDuration } from '@/lib/quiz-state'
 
-async function getCMSContent() {
+export default function SubmissionsPage({ params }: { params: { quizId: string } }) {
+  const [subs, setSubs]       = useState<any[]>([])
+  const [activity, setActivity] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState<{ id: string; score: string } | null>(null)
+  const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [recalcing, setRecalcing] = useState(false)
+  const [msg, setMsg]         = useState('')
   const supabase = createClient()
-  const { data } = await supabase.from('site_content').select('key, value')
-  return Object.fromEntries((data ?? []).map(({ key, value }) => [key, value]))
-}
 
-async function getStats() {
-  const supabase = createClient()
-  const [{ count: quizzes }, { count: students }] = await Promise.all([
-    supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
-  ])
-  return { quizzes: quizzes ?? 0, students: students ?? 0 }
-}
+  const load = async () => {
+    setLoading(true)
+    const [{ data: act }, { data: submissions }] = await Promise.all([
+      supabase.from('activities').select('id, title').eq('id', params.quizId).single(),
+      supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
+    ])
+    setActivity(act); setSubs(submissions ?? [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [params.quizId])
 
-export default async function HomePage() {
-  const [cms, stats] = await Promise.all([getCMSContent(), getStats()])
+  const saveScore = async () => {
+    if (!editing) return
+    const score = parseFloat(editing.score)
+    if (isNaN(score)) return
+    await supabase.from('submissions').update({ final_score: score, score_overridden: true }).eq('id', editing.id)
+    setSubs(p => p.map(s => s.id === editing.id ? { ...s, final_score: score, score_overridden: true } : s))
+    setEditing(null)
+  }
+
+  const handleRecalculate = async () => {
+    setRecalcing(true)
+    const res = await fetch('/api/admin/recalculate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activityId: params.quizId, recalculateScores: true }) })
+    const data = await res.json()
+    setMsg(`Leaderboard updated. ${data.updated ?? 0} entries.`)
+    await load(); setRecalcing(false)
+  }
+
+  const handleCSVImport = async () => {
+    if (!csvFile) return
+    setImporting(true)
+    const text = await csvFile.text()
+    const res = await fetch('/api/admin/import-scores', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activityId: params.quizId, csvData: text }) })
+    const data = await res.json()
+    setMsg(`Imported: ${data.updated} updated.`)
+    setCsvFile(null); await load(); setImporting(false)
+  }
+
+  const exportCSV = () => {
+    if (!subs.length) return
+    const headers = ['email','username','score','time_taken','overridden']
+    const rows = subs.map(s => [s.email, s.username ?? '', s.final_score ?? 0, s.time_taken_seconds ? formatDuration(s.time_taken_seconds) : '', s.score_overridden ? 'yes' : 'no'])
+    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = `${activity?.title ?? 'submissions'}.csv`; a.click()
+  }
+
+  if (loading) return <div style={{ height: 300, background: '#1e293b', borderRadius: 16 }} />
+
+  const completed = subs.filter(s => s.is_complete)
+  const avgScore  = completed.length ? Math.round(completed.reduce((a, s) => a + (s.final_score ?? 0), 0) / completed.length * 10) / 10 : 0
 
   return (
-    <div className="relative overflow-hidden">
-      {/* Ambient glow */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-brand-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute top-40 right-0 w-[400px] h-[400px] bg-accent-500/5 rounded-full blur-[100px] pointer-events-none" />
-
-      {/* Hero */}
-      <section className="page-container pt-24 pb-20 text-center relative">
-        <div className="inline-flex items-center gap-2 glass px-4 py-2 rounded-full text-sm text-brand-300 mb-8 animate-fade-in">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse-slow" />
-          Live quizzes every week
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+        <div>
+          <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.8rem', color: '#f1f5f9', marginBottom: 4 }}>Submissions</h1>
+          <p style={{ color: '#475569', fontSize: '0.875rem' }}>{activity?.title}</p>
         </div>
-
-        <h1 className="font-display font-extrabold text-5xl md:text-7xl leading-[1.05] mb-6 animate-fade-up">
-          {cms.hero_title?.split(' ').map((word: string, i: number) => (
-            <span key={i} className={i > 1 ? 'gradient-text' : ''}>{word} </span>
-          ))}
-        </h1>
-
-        <p className="text-gray-400 text-lg md:text-xl max-w-2xl mx-auto mb-10 font-body animate-fade-up animate-delay-100">
-          {cms.hero_subtitle}
-        </p>
-
-        <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-up animate-delay-200">
-          <Link href="/live" className="btn-primary text-base px-8 py-4">
-            {cms.hero_cta || 'Join Now'} →
-          </Link>
-          <Link href="/leaderboard" className="btn-ghost text-base px-8 py-4">
-            View Leaderboard
-          </Link>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={exportCSV} disabled={!subs.length} className="btn-ghost" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>↓ Export</button>
+          <button onClick={handleRecalculate} disabled={recalcing} className="btn-ghost" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>{recalcing ? 'Updating…' : '↻ Recalculate'}</button>
         </div>
+      </div>
 
-        {/* Stats strip */}
-        <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto animate-fade-up animate-delay-300">
-          {[
-            { label: 'Quizzes Run', value: stats.quizzes },
-            { label: 'Students', value: stats.students },
-            { label: 'Weekly Prizes', value: '🏆' },
-            { label: 'Live Every', value: 'Week' },
-          ].map(({ label, value }) => (
-            <div key={label} className="glass rounded-xl p-4">
-              <div className="font-display font-bold text-2xl text-white">{value}</div>
-              <div className="text-gray-500 text-sm mt-1">{label}</div>
-            </div>
-          ))}
+      {/* CSV Import */}
+      <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 12, padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
+        <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: 10 }}>Import scores via CSV (columns: <code style={{ color: '#818cf8' }}>email</code>, <code style={{ color: '#818cf8' }}>score</code>)</p>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] ?? null)} style={{ color: '#64748b', fontSize: '0.8rem', flex: 1 }} />
+          <button onClick={handleCSVImport} disabled={!csvFile || importing} className="btn-primary" style={{ padding: '7px 16px', fontSize: '0.85rem' }}>{importing ? '…' : 'Import'}</button>
         </div>
-      </section>
+        {msg && <p style={{ color: '#4ade80', fontSize: '0.8rem', marginTop: 8 }}>{msg}</p>}
+      </div>
 
-      {/* About */}
-      <section className="page-container py-16">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="section-title mb-4">What is ThinqTank Live?</h2>
-          <p className="text-gray-400 text-lg font-body leading-relaxed">{cms.about_text}</p>
-        </div>
-      </section>
+      {/* Stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: '1.5rem' }}>
+        {[{ l: 'Total', v: subs.length }, { l: 'Completed', v: completed.length }, { l: 'Avg Score', v: avgScore }].map(({ l, v }) => (
+          <div key={l} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 12, padding: '1rem', textAlign: 'center' }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#e2e8f0' }}>{v}</div>
+            <div style={{ color: '#475569', fontSize: '0.75rem', marginTop: 4 }}>{l}</div>
+          </div>
+        ))}
+      </div>
 
-      {/* Feature cards */}
-      <section className="page-container py-10 pb-20">
-        <div className="grid md:grid-cols-3 gap-6">
-          {[
-            {
-              icon: '⚡',
-              title: 'Weekly Live Quizzes',
-              desc: 'Timed, competitive quizzes every week. Resume anytime before the deadline.'
-            },
-            {
-              icon: '🏆',
-              title: 'Real-Time Leaderboard',
-              desc: 'Rankings update instantly. Climb the weekly and all-time boards.'
-            },
-            {
-              icon: '🎯',
-              title: 'Smart Scoring',
-              desc: 'Keyword + fuzzy match evaluation. Partial credit for close answers.'
-            },
-          ].map(({ icon, title, desc }) => (
-            <div key={title} className="card-hover group">
-              <div className="text-3xl mb-4">{icon}</div>
-              <h3 className="font-display font-bold text-lg text-white mb-2 group-hover:text-brand-300 transition-colors">
-                {title}
-              </h3>
-              <p className="text-gray-500 text-sm leading-relaxed">{desc}</p>
-            </div>
-          ))}
+      {!subs.length ? (
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, padding: '3rem', textAlign: 'center', color: '#475569' }}>No submissions yet.</div>
+      ) : (
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+                  {['#','Player','Email','Score','Time','Status',''].map(h => (
+                    <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: '0.7rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {subs.map((s, i) => (
+                  <tr key={s.id} style={{ borderBottom: '1px solid rgba(148,163,184,0.04)' }}>
+                    <td style={{ padding: '12px 16px', color: '#475569', fontSize: '0.8rem', fontFamily: 'monospace' }}>{i + 1}</td>
+                    <td style={{ padding: '12px 16px', color: '#e2e8f0', fontSize: '0.875rem' }}>{s.username ?? '—'}</td>
+                    <td style={{ padding: '12px 16px', color: '#475569', fontSize: '0.75rem', fontFamily: 'monospace' }}>{s.email}</td>
+                    <td style={{ padding: '12px 16px' }}>
+                      {editing?.id === s.id ? (
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <input type="number" value={editing.score} onChange={e => setEditing({ ...editing, score: e.target.value })}
+                            onKeyDown={e => e.key === 'Enter' && saveScore()} className="input-field" style={{ width: 70, padding: '4px 8px', fontSize: '0.85rem' }} />
+                          <button onClick={saveScore} style={{ background: 'none', border: 'none', color: '#4ade80', cursor: 'pointer', fontSize: '1rem' }}>✓</button>
+                          <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
+                        </div>
+                      ) : (
+                        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: s.score_overridden ? '#f59e0b' : '#e2e8f0' }}>
+                          {s.final_score ?? 0}{s.score_overridden && <span style={{ color: '#475569', fontSize: '0.7rem', marginLeft: 4 }}>*</span>}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: '12px 16px', color: '#475569', fontSize: '0.78rem', fontFamily: 'monospace' }}>{s.time_taken_seconds ? formatDuration(s.time_taken_seconds) : '—'}</td>
+                    <td style={{ padding: '12px 16px' }}>
+                      <span style={{ display: 'inline-flex', padding: '2px 8px', borderRadius: 99, fontSize: '0.68rem', fontWeight: 700, background: s.is_complete ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: s.is_complete ? '#4ade80' : '#fbbf24', border: `1px solid ${s.is_complete ? 'rgba(34,197,94,0.2)' : 'rgba(245,158,11,0.2)'}` }}>
+                        {s.is_complete ? 'Done' : 'In Progress'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '12px 16px' }}>
+                      <button onClick={() => setEditing({ id: s.id, score: String(s.final_score ?? 0) })} style={{ background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', fontSize: '0.8rem' }}>Edit Score</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </section>
+      )}
     </div>
   )
 }
