@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 
 
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
@@ -16,10 +16,29 @@ export default function LoginPage() {
   const [otp, setOtp]           = useState('')
   const [error, setError]       = useState('')
   const [usePassword, setUsePassword] = useState(false)
+  const [timeLeft, setTimeLeft] = useState(0)
+  const [canResend, setCanResend] = useState(false)
   const router       = useRouter()
   const searchParams = useSearchParams()
   const redirect     = searchParams.get('redirect') || '/live'
   const supabase     = createClient()
+
+  // Timer for OTP expiration
+  useEffect(() => {
+    let interval: NodeJS.Timeout
+    if (step === 'otp' && timeLeft > 0) {
+      interval = setInterval(() => {
+        setTimeLeft(prev => {
+          if (prev <= 1) {
+            setCanResend(true)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    }
+    return () => clearInterval(interval)
+  }, [step, timeLeft])
 
   const handleEmailSubmit = async () => {
     setError(''); setLoading(true)
@@ -30,7 +49,11 @@ export default function LoginPage() {
     } else {
       const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })
       if (error) setError(error.message)
-      else setStep('otp')
+      else {
+        setStep('otp')
+        setTimeLeft(600) // 10 minutes
+        setCanResend(false)
+      }
     }
     setLoading(false)
   }
@@ -44,6 +67,20 @@ export default function LoginPage() {
       await supabase.from('users').upsert({ id: user.id, email: user.email! }, { onConflict: 'id', ignoreDuplicates: true })
     }
     router.push(redirect); router.refresh()
+    setLoading(false)
+  }
+
+  const handleResendCode = async () => {
+    setError('')
+    setLoading(true)
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })
+    if (error) {
+      setError(error.message)
+    } else {
+      setOtp('')
+      setCanResend(false)
+      setTimeLeft(600) // 10 minutes
+    }
     setLoading(false)
   }
 
@@ -106,7 +143,12 @@ export default function LoginPage() {
           {step === 'otp' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div>
-                <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>6-digit code</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>6-digit code</label>
+                  <span style={{ fontSize: '0.7rem', color: timeLeft > 60 ? '#94a3b8' : timeLeft > 0 ? '#f59e0b' : '#ef4444' }}>
+                    {timeLeft > 0 ? `Expires in ${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, '0')}` : 'Code expired'}
+                  </span>
+                </div>
                 <input type="text" value={otp}
                   onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   onKeyDown={e => e.key === 'Enter' && handleOTPVerify()}
@@ -118,10 +160,20 @@ export default function LoginPage() {
                   }} />
               </div>
               {error && <p style={{ color: '#f87171', fontSize: '0.85rem', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '8px 12px' }}>{error}</p>}
-              <button onClick={handleOTPVerify} disabled={otp.length < 6 || loading} className="btn-primary" style={{ width: '100%', padding: '12px' }}>
+              <button onClick={handleOTPVerify} disabled={otp.length < 6 || loading || timeLeft === 0} className="btn-primary" style={{ width: '100%', padding: '12px', opacity: timeLeft === 0 ? 0.5 : 1 }}>
                 {loading ? 'Verifying…' : 'Verify & Continue →'}
               </button>
-              <button onClick={() => { setStep('email'); setOtp(''); setError('') }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
+              
+              {canResend && (
+                <button onClick={handleResendCode} disabled={loading} style={{
+                  width: '100%', padding: '12px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)',
+                  borderRadius: 12, color: '#22c55e', fontSize: '0.9rem', fontWeight: 500, cursor: 'pointer',
+                }}>
+                  {loading ? 'Sending new code…' : 'Resend code'}
+                </button>
+              )}
+
+              <button onClick={() => { setStep('email'); setOtp(''); setError(''); setTimeLeft(0); setCanResend(false) }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
                 ← Back
               </button>
             </div>
