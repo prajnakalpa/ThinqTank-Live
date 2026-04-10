@@ -121,7 +121,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                     <td style={{ padding: '12px 16px' }}>
                       {editing?.id === s.id ? (
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                          <input type="number" value={editing.score} onChange={e => setEditing({ ...editing, score: e.target.value })}
+                          <input type="number" value={editing?.score ?? ''} onChange={e => setEditing({ ...editing, score: e.target.value })}
                             onKeyDown={e => e.key === 'Enter' && saveScore()} className="input-field" style={{ width: 70, padding: '4px 8px', fontSize: '0.85rem' }} />
                           <button onClick={saveScore} style={{ background: 'none', border: 'none', color: '#4ade80', cursor: 'pointer', fontSize: '1rem' }}>✓</button>
                           <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
