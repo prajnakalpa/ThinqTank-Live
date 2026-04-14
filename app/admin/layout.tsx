@@ -1,5 +1,7 @@
+// app/admin/layout.tsx
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import Link from 'next/link'
 
 const NAV = [
@@ -13,8 +15,20 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login?redirect=/admin')
-  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+
+  const { data: profile } = await supabase
+    .from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') redirect('/')
+
+  // Master password check (only if ADMIN_MASTER_PASSWORD env var is set)
+  const masterPassword = process.env.ADMIN_MASTER_PASSWORD
+  if (masterPassword) {
+    const cookieStore = cookies()
+    const verified = cookieStore.get('admin_master_verified')?.value
+    if (verified !== '1') {
+      redirect('/admin/unlock')
+    }
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex' }}>
@@ -34,6 +48,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             </div>
           </Link>
         </div>
+
         <nav style={{ flex: 1, padding: '1rem 0.75rem', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {NAV.map(({ href, label, icon }) => (
             <Link key={href} href={href} style={{
@@ -43,12 +58,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             }}>{icon} {label}</Link>
           ))}
         </nav>
+
         <div style={{ padding: '1rem', borderTop: '1px solid rgba(148,163,184,0.07)' }}>
           <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '10px 12px' }}>
+            <div style={{ color: '#334155', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Signed in as</div>
             <div style={{ color: '#64748b', fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{user.email}</div>
           </div>
         </div>
       </aside>
+
       <main style={{ flex: 1, marginLeft: 220, minHeight: '100vh', padding: '2.5rem' }}>
         {children}
       </main>
