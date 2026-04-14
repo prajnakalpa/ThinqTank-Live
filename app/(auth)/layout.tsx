@@ -1,14 +1,6 @@
-import Navbar from '@/components/layout/Navbar'
-import Footer from '@/components/layout/Footer'
-
-export default function MainLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="noise">
-      <Navbar />
-      <main className="pt-16 min-h-screen">
-        {children}
-      </main>
-      <Footer />
-    </div>
-  )
+// app/(auth)/layout.tsx
+// Auth pages (login, reset, update-password) are full-screen standalone.
+// Do NOT add Navbar/Footer here — each page manages its own layout.
+export default function AuthLayout({ children }: { children: React.ReactNode }) {
+  return <>{children}</>
 }
