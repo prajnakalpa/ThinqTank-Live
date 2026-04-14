@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,21 +9,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Email and password required' }, { status: 400 })
     }
 
-    // Get the master password hash from environment or database
-    const masterPasswordHash = process.env.ADMIN_MASTER_PASSWORD_HASH
+    // Get the master password from environment (plain text)
+    const masterPassword = process.env.ADMIN_MASTER_PASSWORD
     
-    if (!masterPasswordHash) {
+    if (!masterPassword) {
       return NextResponse.json(
         { error: 'Master password not configured. Contact your administrator.' },
         { status: 500 }
       )
     }
 
-    // Hash the provided password
-    const passwordHash = crypto.createHash('sha256').update(password).digest('hex')
-
-    // Compare hashes
-    if (passwordHash !== masterPasswordHash) {
+    // Compare passwords directly
+    if (password !== masterPassword) {
       return NextResponse.json({ error: 'Invalid master password' }, { status: 401 })
     }
 
@@ -44,16 +40,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create a temporary password for this session
-    // In a real app, you'd create a session token instead
-    const tempPassword = crypto.randomBytes(16).toString('hex')
-
-    // Update the user's password temporarily (in production, use session tokens)
-    // For now, we return success and the client will handle auth
     return NextResponse.json({
       success: true,
       email,
-      tempPassword: 'session-verified', // This would be a real session token
+      adminId: admin.id,
       message: 'Master password verified. You can now access admin panel.',
     })
   } catch (error) {
