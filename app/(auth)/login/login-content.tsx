@@ -8,13 +8,15 @@ import Link from 'next/link'
 export default function LoginContent() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [masterPassword, setMasterPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [step, setStep] = useState<'email' | 'otp'>('email')
+  const [step, setStep] = useState<'email' | 'otp' | 'admin-password' | 'forgot-password'>('email')
   const [otp, setOtp] = useState('')
   const [error, setError] = useState('')
   const [usePassword, setUsePassword] = useState(false)
   const [timeLeft, setTimeLeft] = useState(0)
   const [canResend, setCanResend] = useState(false)
+  const [showMasterPassword, setShowMasterPassword] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirect = searchParams.get('redirect') || '/live'
@@ -81,6 +83,57 @@ export default function LoginContent() {
     setLoading(false)
   }
 
+  const handleForgotPassword = async () => {
+    if (!email) { setError('Enter your email'); return }
+    setError(''); setLoading(true)
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    })
+    if (error) {
+      setError(error.message)
+    } else {
+      setError('')
+      setStep('email')
+      alert('Password reset link sent to your email!')
+    }
+    setLoading(false)
+  }
+
+  const handleMasterPassword = async () => {
+    if (!masterPassword) { setError('Enter master password'); return }
+    if (!email) { setError('Enter admin email'); return }
+    setError(''); setLoading(true)
+    
+    // Check against stored master password hash
+    try {
+      const response = await fetch('/api/auth/verify-master-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: masterPassword, email }),
+      })
+      const data = await response.json()
+      
+      if (!response.ok) {
+        setError(data.error || 'Invalid master password')
+        setLoading(false)
+        return
+      }
+
+      // Master password verified - now we need to sign in
+      // Create a special auth session for master password override
+      // For now, set admin bypass token (in real app, use proper JWT)
+      sessionStorage.setItem('admin_master_override', 'true')
+      sessionStorage.setItem('admin_email', email)
+      
+      // Redirect to admin panel
+      router.push('/admin')
+      router.refresh()
+    } catch (err) {
+      setError('Failed to verify master password')
+    }
+    setLoading(false)
+  }
+
   return (
     <div style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -105,10 +158,10 @@ export default function LoginContent() {
           <div style={{ height: 2, background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #3b82f6)', borderRadius: 99, marginBottom: 24 }} />
 
           <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.4rem', color: '#f1f5f9', marginBottom: 6 }}>
-            {step === 'otp' ? 'Check your email' : 'Sign in'}
+            {step === 'otp' ? 'Check your email' : step === 'admin-password' ? 'Admin Password' : step === 'forgot-password' ? 'Reset Password' : 'Sign in'}
           </h2>
           <p style={{ color: '#475569', fontSize: '0.875rem', marginBottom: 24 }}>
-            {step === 'otp' ? `We sent a code to ${email}` : 'New here? An account is created automatically.'}
+            {step === 'otp' ? `We sent a code to ${email}` : step === 'admin-password' ? 'Enter your admin password or master password' : step === 'forgot-password' ? 'Enter your email to reset your password' : 'New here? An account is created automatically.'}
           </p>
 
           {step === 'email' && (
@@ -131,9 +184,16 @@ export default function LoginContent() {
               <button onClick={handleEmailSubmit} disabled={!email || loading} className="btn-primary" style={{ width: '100%', padding: '12px', marginTop: 4 }}>
                 {loading ? 'Sending…' : usePassword ? 'Sign In' : 'Send Code'}
               </button>
-              <button onClick={() => setUsePassword(!usePassword)} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
-                {usePassword ? '← Use email OTP (students)' : 'Admin? Sign in with password →'}
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.8rem' }}>
+                <button onClick={() => { setUsePassword(!usePassword); setError('') }} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
+                  {usePassword ? '← Use email OTP (students)' : 'Admin? Sign in with password →'}
+                </button>
+                {usePassword && (
+                  <button onClick={() => { setStep('forgot-password'); setError('') }} style={{ background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', padding: 0, textAlign: 'center', textDecoration: 'underline' }}>
+                    Forgot password?
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -171,6 +231,53 @@ export default function LoginContent() {
               )}
 
               <button onClick={() => { setStep('email'); setOtp(''); setError(''); setTimeLeft(0); setCanResend(false) }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
+                ← Back
+              </button>
+            </div>
+          )}
+
+          {step === 'forgot-password' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div>
+                <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                  placeholder="admin@example.com" className="input-field" autoFocus />
+              </div>
+              {error && <p style={{ color: '#f87171', fontSize: '0.85rem', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '8px 12px' }}>{error}</p>}
+              <button onClick={handleForgotPassword} disabled={!email || loading} className="btn-primary" style={{ width: '100%', padding: '12px' }}>
+                {loading ? 'Sending…' : 'Send Reset Link'}
+              </button>
+              <button onClick={() => { setStep('email'); setError(''); setEmail(''); setPassword('') }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
+                ← Back to login
+              </button>
+              <div style={{ borderTop: '1px solid rgba(148,163,184,0.1)', paddingTop: 12, marginTop: 8 }}>
+                <p style={{ color: '#64748b', fontSize: '0.75rem', marginBottom: 8 }}>No email access? Use master password:</p>
+                <button onClick={() => { setStep('admin-password'); setError('') }} style={{ width: '100%', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 12, color: '#a78bfa', padding: '10px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
+                  Use Master Password
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 'admin-password' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div>
+                <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Admin Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                  placeholder="admin@example.com" className="input-field" />
+              </div>
+              <div>
+                <label style={{ display: 'block', color: '#64748b', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Master Password</label>
+                <input type="password" value={masterPassword} onChange={e => setMasterPassword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleMasterPassword()}
+                  placeholder="••••••••" className="input-field" autoFocus />
+                <p style={{ fontSize: '0.7rem', color: '#64748b', marginTop: 6 }}>Emergency access only. This is a master override password set during setup.</p>
+              </div>
+              {error && <p style={{ color: '#f87171', fontSize: '0.85rem', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '8px 12px' }}>{error}</p>}
+              <button onClick={handleMasterPassword} disabled={!email || !masterPassword || loading} className="btn-primary" style={{ width: '100%', padding: '12px' }}>
+                {loading ? 'Verifying…' : 'Unlock as Admin'}
+              </button>
+              <button onClick={() => { setStep('email'); setError(''); setEmail(''); setMasterPassword('') }} style={{ background: 'none', border: 'none', color: '#475569', fontSize: '0.8rem', cursor: 'pointer', padding: 0, textAlign: 'center' }}>
                 ← Back
               </button>
             </div>

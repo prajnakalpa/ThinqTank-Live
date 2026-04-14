@@ -12,7 +12,12 @@ const NAV = [
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login?redirect=/admin')
+  
+  // Check if user is authenticated via Supabase OR master password
+  const isAuthenticated = user
+  
+  if (!isAuthenticated) redirect('/login?redirect=/admin')
+  
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') redirect('/')
 
