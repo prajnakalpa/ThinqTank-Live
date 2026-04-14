@@ -176,3 +176,7 @@ body {
   background: #22c55e;
   animation: pulse-ring 1.5s ease-out infinite;
 }
+/* footer-link */
+.footer-link:hover {
+  color: #94a3b8;
+}
