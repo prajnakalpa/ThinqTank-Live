@@ -1,41 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 
 export default function HomePage() {
-  const [cms, setCms] = useState<any>({})
-  const [stats, setStats] = useState({ quizzes: 0, students: 0 })
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const supabase = createClient()
-        
-        // Get CMS content
-        const { data: cmsData } = await supabase.from('site_content').select('key, value')
-        const cmsContent = Object.fromEntries((cmsData ?? []).map(({ key, value }: any) => [key, value]))
-        setCms(cmsContent)
-
-        // Get stats
-        const [{ count: quizzes }, { count: students }] = await Promise.all([
-          supabase.from('activities').select('*', { count: 'exact', head: true }).eq('type', 'quiz'),
-          supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'student'),
-        ])
-        
-        setStats({ quizzes: quizzes ?? 0, students: students ?? 0 })
-      } catch (error) {
-        console.error('Error loading data:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadData()
-  }, [])
-
   return (
     <div style={{ overflow: 'hidden' }}>
 
@@ -66,18 +33,17 @@ export default function HomePage() {
             fontWeight: 800, fontSize: 'clamp(2.5rem, 7vw, 5rem)',
             lineHeight: 1.08, color: '#f1f5f9', marginBottom: 24,
           }}>
-            {cms.hero_title || 'Welcome to'}{' '}
-            <span className="gradient-text">ThinqTank Live</span>
+            Welcome to <span className="gradient-text">ThinqTank Live</span>
           </h1>
 
           <p className="animate-fade-up animate-delay-1" style={{ color: '#64748b', fontSize: 'clamp(1rem, 2vw, 1.2rem)', maxWidth: 560, margin: '0 auto 2.5rem', lineHeight: 1.7 }}>
-            {cms.hero_subtitle || 'Challenge your mind. Compete with the best. Rise up the leaderboard.'}
+            Challenge your mind. Compete with the best. Rise up the leaderboard.
           </p>
 
           {/* CTAs */}
           <div className="animate-fade-up animate-delay-2" style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
             <Link href="/live" className="btn-primary" style={{ padding: '12px 28px', fontSize: '0.95rem' }}>
-              {cms.hero_cta || 'Join Now'} →
+              Join Now →
             </Link>
             <Link href="/leaderboard" className="btn-ghost" style={{ padding: '12px 28px', fontSize: '0.95rem' }}>
               View Leaderboard
@@ -90,8 +56,8 @@ export default function HomePage() {
             gap: 16, maxWidth: 640, margin: '4rem auto 0',
           }}>
             {[
-              { value: stats.quizzes, label: 'Quizzes Run', icon: '⚡' },
-              { value: stats.students, label: 'Students', icon: '👥' },
+              { value: '∞', label: 'Quizzes', icon: '⚡' },
+              { value: '∞', label: 'Students', icon: '👥' },
               { value: '🏆', label: 'Weekly Prizes', icon: '' },
               { value: 'Weekly', label: 'Cadence', icon: '📅' },
             ].map(({ value, label, icon }) => (
@@ -116,7 +82,7 @@ export default function HomePage() {
           <p style={{ color: '#64748b', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 12 }}>ABOUT</p>
           <h2 className="section-title" style={{ marginBottom: 16 }}>What is ThinqTank Live?</h2>
           <p style={{ color: '#64748b', lineHeight: 1.8, fontSize: '1rem' }}>
-            {cms.about_text || 'ThinqTank Live is a competitive quiz platform for curious minds. Weekly quizzes, real-time rankings, and a community that loves to think.'}
+            ThinqTank Live is a competitive quiz platform for curious minds. Weekly quizzes, real-time rankings, and a community that loves to think.
           </p>
         </div>
       </section>
