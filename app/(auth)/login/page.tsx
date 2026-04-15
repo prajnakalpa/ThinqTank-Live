@@ -7,12 +7,14 @@ import { getURL } from '@/lib/utils'
 
 export default function LoginPage() {
   const [email, setEmail]     = useState('')
+  const [otp, setOtp]         = useState('')
+  const [step, setStep]       = useState<'email' | 'otp'>('email')
   const [loading, setLoading] = useState(false)
-  const [sent, setSent]       = useState(false)
   const [error, setError]     = useState('')
   const supabase = createClient()
 
-  const handleLogin = async () => {
+  // STEP 1: send OTP
+  const handleSendOtp = async () => {
     if (!email.trim()) return
 
     setLoading(true)
@@ -21,12 +23,31 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${getURL()}auth/callback`,
+        shouldCreateUser: true,
       },
     })
 
     if (error) setError(error.message)
-    else setSent(true)
+    else setStep('otp')
+
+    setLoading(false)
+  }
+
+  // STEP 2: verify OTP
+  const handleVerifyOtp = async () => {
+    if (!otp.trim()) return
+
+    setLoading(true)
+    setError('')
+
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token: otp,
+      type: 'email',
+    })
+
+    if (error) setError(error.message)
+    else window.location.href = '/'
 
     setLoading(false)
   }
@@ -37,14 +58,7 @@ export default function LoginPage() {
 
         <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 20, padding: '2rem' }}>
 
-          {sent ? (
-            <div style={{ textAlign: 'center' }}>
-              <h2 style={{ color: '#f1f5f9' }}>Check your email</h2>
-              <p style={{ color: '#64748b' }}>
-                OTP sent to <strong>{email}</strong>
-              </p>
-            </div>
-          ) : (
+          {step === 'email' ? (
             <>
               <h2 style={{ color: '#f1f5f9' }}>Login</h2>
 
@@ -52,23 +66,40 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="Enter email"
+                placeholder="you@example.com"
               />
 
               {error && <p style={{ color: 'red' }}>{error}</p>}
 
-              <button onClick={handleLogin} disabled={loading}>
-                {loading ? 'Sending...' : 'Send OTP'}
+              <button onClick={handleSendOtp} disabled={loading}>
+                {loading ? 'Sending…' : 'Send OTP'}
               </button>
 
-              <p style={{ marginTop: 10 }}>
-                Forgot password?{' '}
-                <Link href="/auth/reset-password">
-                  Reset
-                </Link>
-              </p>
+              <Link href="/auth/reset-password">
+                <p style={{ marginTop: 10, color: '#818cf8' }}>
+                  Forgot password?
+                </p>
+              </Link>
+            </>
+          ) : (
+            <>
+              <h2 style={{ color: '#f1f5f9' }}>Enter OTP</h2>
+
+              <input
+                type="text"
+                value={otp}
+                onChange={e => setOtp(e.target.value)}
+                placeholder="Enter OTP"
+              />
+
+              {error && <p style={{ color: 'red' }}>{error}</p>}
+
+              <button onClick={handleVerifyOtp} disabled={loading}>
+                {loading ? 'Verifying…' : 'Verify OTP'}
+              </button>
             </>
           )}
+
         </div>
       </div>
     </div>
