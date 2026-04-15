@@ -71,16 +71,17 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     setSaving(true)
     const qid = await getRealQuizId()
 
-    const payload = { ...editing, quiz_id: qid }
-    delete payload.id // Don't send ID for inserts
+    // FIX: use destructuring instead of `delete payload.id` to satisfy TypeScript strict mode
+    const { id: editingId, ...fields } = editing
+    const payload = { ...fields, quiz_id: qid }
 
-    if (editing.id) {
+    if (editingId) {
       const { data } = await supabase
         .from('questions')
         .update(payload)
-        .eq('id', editing.id)
+        .eq('id', editingId)
         .select().single()
-      setQuestions(p => p.map(q => q.id === editing.id ? data as Q : q))
+      setQuestions(p => p.map(q => q.id === editingId ? data as Q : q))
     } else {
       const { data } = await supabase
         .from('questions')
