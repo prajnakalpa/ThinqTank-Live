@@ -1,4 +1,5 @@
 // app/(auth)/callback/route.ts
+
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
@@ -18,43 +19,44 @@ export async function GET(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() {
-          return cookieStore.getAll()
+        get(name: string) {
+          return cookieStore.get(name)?.value
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
-          )
+        set(name: string, value: string, options: any) {
+          cookieStore.set(name, value, options)
+        },
+        remove(name: string, options: any) {
+          cookieStore.set(name, '', { ...options, maxAge: 0 })
         },
       },
     }
   )
 
-  // PKCE code exchange (standard OAuth / email confirm flow)
+  // PKCE flow
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
       if (type === 'recovery') {
-        return NextResponse.redirect(`${origin}/update-password`)
+        return NextResponse.redirect(`${origin}/auth/update-password`)
       }
       return NextResponse.redirect(`${origin}${next}`)
     }
   }
 
-  // Token hash flow (magic link / OTP / password recovery)
+  // OTP / magic link flow
   if (token_hash && type) {
     const { error } = await supabase.auth.verifyOtp({
       token_hash,
       type: type as any,
     })
+
     if (!error) {
       if (type === 'recovery') {
-        return NextResponse.redirect(`${origin}/update-password`)
+        return NextResponse.redirect(`${origin}/auth/update-password`)
       }
       return NextResponse.redirect(`${origin}${next}`)
     }
   }
 
-  // Auth failed — redirect back to login with error
   return NextResponse.redirect(`${origin}/login?error=auth_callback_failed`)
 }
