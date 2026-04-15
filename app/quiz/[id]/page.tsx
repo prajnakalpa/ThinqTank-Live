@@ -1,84 +1,55 @@
 // app/quiz/[id]/page.tsx
-// app/quiz/[id]/page.tsx
 'use client'
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { getSecondsRemaining } from '@/lib/quiz-state'
+import { getSecondsRemaining, formatTime } from '@/lib/quiz-state'
 
 interface Props { params: { id: string } }
 
 export default function QuizPage({ params }: Props) {
   const [state, setState] = useState<'loading'|'username'|'quiz'|'submitted'|'closed'|'error'>('loading')
-  const [activity, setActivity] = useState<any>(null)
   const [quiz, setQuiz] = useState<any>(null)
   const [questions, setQuestions] = useState<any[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [submission, setSubmission] = useState<any>(null)
-  const [username, setUsername] = useState('')
   const [timeLeft, setTimeLeft] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [submitError, setSubmitError] = useState('')
   const [currentQ, setCurrentQ] = useState(0)
 
   const router = useRouter()
   const supabase = createClient()
 
-  // Refs to prevent stale closures in intervals
+  // Refs to prevent stale closures (The "Critical Bug" Fix)
   const timerRef = useRef<NodeJS.Timeout>()
-  const autosaveRef = useRef<NodeJS.Timeout>()
   const answersRef = useRef<Record<string, string>>({})
   const submissionRef = useRef<any>(null)
   const quizRef = useRef<any>(null)
   const submittingRef = useRef(false)
 
-  // Sync state to refs immediately
   useEffect(() => { answersRef.current = answers }, [answers])
   useEffect(() => { submissionRef.current = submission }, [submission])
   useEffect(() => { quizRef.current = quiz }, [quiz])
 
-  // Cleanup intervals on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-      if (autosaveRef.current) clearInterval(autosaveRef.current)
-    }
-  }, [])
-
-  const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, durationSeconds: number) => {
+  const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
     if (submittingRef.current) return
     submittingRef.current = true
-    setSaving(true)
+    
+    await supabase.from('submissions').update({
+      answers: currentAnswers,
+      is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: duration,
+    }).eq('id', subId)
 
-    try {
-      // 1. Update Supabase
-      await supabase.from('submissions').update({
-        answers: currentAnswers,
-        is_complete: true,
-        submission_time: new Date().toISOString(),
-        time_taken_seconds: durationSeconds,
-      }).eq('id', subId)
-
-      // 2. Trigger Scoring API
-      const res = await fetch('/api/quiz/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissionId: subId }),
-      })
-
-      if (res.ok) {
-        const { score } = await res.json()
-        setSubmission((prev: any) => ({ ...prev, final_score: score, is_complete: true }))
-      }
-      
-      setState('submitted')
-    } catch (err) {
-      console.error("Auto-submit failed:", err)
-    } finally {
-      setSaving(false)
-    }
+    await fetch('/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: subId }),
+    })
+    setState('submitted')
   }
 
   const loadQuiz = useCallback(async () => {
@@ -86,159 +57,154 @@ export default function QuizPage({ params }: Props) {
     if (!user) { router.push(`/login?redirect=/quiz/${params.id}`); return }
 
     const { data: act } = await supabase
-      .from('activities')
-      .select('*, quizzes(*, questions(*))')
-      .eq('id', params.id)
-      .single()
+      .from('activities').select('*, quizzes(*, questions(*))')
+      .eq('id', params.id).single()
 
-    if (!act) { setState('error'); return }
-    if (act.status === 'closed' || act.status === 'archived') { setState('closed'); return }
+    if (!act || act.status === 'closed') { setState('closed'); return }
 
-    setActivity(act)
     const q = act.quizzes
     setQuiz(q)
-    
     const qs = (q?.questions ?? []).sort((a: any, b: any) => a.order_index - b.order_index)
     setQuestions(qs)
 
     const { data: existingSub } = await supabase
-      .from('submissions')
-      .select('*')
-      .eq('activity_id', params.id)
-      .eq('user_id', user.id)
-      .single()
+      .from('submissions').select('*')
+      .eq('activity_id', params.id).eq('user_id', user.id).single()
 
-    if (existingSub?.is_complete) { 
-      setState('submitted')
-      setSubmission(existingSub)
-      return 
-    }
+    if (existingSub?.is_complete) { setState('submitted'); setSubmission(existingSub); return }
 
-    const { data: profile } = await supabase
-      .from('users')
-      .select('username')
-      .eq('id', user.id)
-      .single()
-
+    const { data: profile } = await supabase.from('users').select('username').eq('id', user.id).single()
     if (!profile?.username) { setState('username'); return }
-    setUsername(profile.username)
 
     if (existingSub) {
       setSubmission(existingSub)
-      const savedAnswers = existingSub.answers ?? {}
-      setAnswers(savedAnswers)
-      
+      setAnswers(existingSub.answers ?? {})
       const remaining = getSecondsRemaining(existingSub.start_time, q.duration_minutes * 60)
       if (remaining <= 0) {
-        await doAutoSubmit(existingSub.id, savedAnswers, q.duration_minutes * 60)
+        doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60)
         return
       }
       setTimeLeft(remaining)
     } else {
-      const { data: newSub } = await supabase
-        .from('submissions')
-        .insert({
-          activity_id: params.id,
-          user_id: user.id,
-          email: user.email,
-          username: profile.username,
-          start_time: new Date().toISOString(),
-        })
-        .select().single()
-
+      const { data: newSub } = await supabase.from('submissions').insert({
+        activity_id: params.id, user_id: user.id, email: user.email,
+        username: profile.username, start_time: new Date().toISOString()
+      }).select().single()
       setSubmission(newSub)
       setTimeLeft(q.duration_minutes * 60)
     }
-
     setState('quiz')
-  }, [params.id, router, supabase])
+  }, [params.id])
 
   useEffect(() => { loadQuiz() }, [loadQuiz])
 
-  // Timer Logic
+  // Timer loop
   useEffect(() => {
-    if (state !== 'quiz' || !submission?.id) return
-
+    if (state !== 'quiz' || !submission) return
     timerRef.current = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
           clearInterval(timerRef.current)
-          // Always use refs here to ensure we have the absolute latest data
-          const currentSub = submissionRef.current
-          const currentQuiz = quizRef.current
-          if (currentSub?.id) {
-            doAutoSubmit(currentSub.id, answersRef.current, currentQuiz?.duration_minutes * 60)
-          }
+          doAutoSubmit(submissionRef.current.id, answersRef.current, quizRef.current.duration_minutes * 60)
           return 0
         }
         return prev - 1
       })
     }, 1000)
-
     return () => clearInterval(timerRef.current)
-  }, [state, submission?.id])
-
-  // Autosave Logic (Every 30s)
-  useEffect(() => {
-    if (state !== 'quiz') return
-
-    autosaveRef.current = setInterval(async () => {
-      const sub = submissionRef.current
-      if (!sub?.id || sub?.is_complete || submittingRef.current) return
-
-      setSaving(true)
-      await supabase.from('submissions')
-        .update({ answers: answersRef.current })
-        .eq('id', sub.id)
-      setSaving(false)
-    }, 30000)
-
-    return () => clearInterval(autosaveRef.current)
-  }, [state, supabase])
+  }, [state, submission])
 
   const handleSubmit = async () => {
-    const sub = submissionRef.current
-    if (!sub?.id || submittingRef.current) return
-    
+    if (submittingRef.current) return
     submittingRef.current = true
     setSaving(true)
+    
+    const timeTaken = Math.floor((Date.now() - new Date(submission.start_time).getTime()) / 1000)
+    await supabase.from('submissions').update({
+      answers: answersRef.current,
+      is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: timeTaken,
+    }).eq('id', submission.id)
 
-    const timeTaken = Math.floor((Date.now() - new Date(sub.start_time).getTime()) / 1000)
-
-    try {
-      await supabase.from('submissions').update({
-        answers: answersRef.current,
-        is_complete: true,
-        submission_time: new Date().toISOString(),
-        time_taken_seconds: timeTaken,
-      }).eq('id', sub.id)
-
-      const res = await fetch('/api/quiz/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submissionId: sub.id }),
-      })
-
-      if (!res.ok) throw new Error("Submission failed")
-
-      const { score } = await res.json()
-      setSubmission((prev: any) => ({ ...prev, final_score: score, is_complete: true }))
-      setState('submitted')
-    } catch (err) {
-      setSubmitError('Submit failed. Please check your connection and try again.')
-      submittingRef.current = false
-    } finally {
-      setSaving(false)
-    }
+    await fetch('/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: submission.id }),
+    })
+    setState('submitted')
   }
 
-  // UI remains unchanged as requested
-  if (state === 'loading') return <div>Loading...</div>
-  
+  // --- UI RENDERING ---
+
+  if (state === 'loading') return <div className="p-20 text-center">Loading Quiz...</div>
+  if (state === 'submitted') return (
+    <div className="p-20 text-center">
+      <h1 className="text-3xl font-bold mb-4">Quiz Submitted!</h1>
+      <p>Thank you for participating.</p>
+      <button onClick={() => router.push('/')} className="mt-6 bg-blue-600 px-6 py-2 rounded">Go Home</button>
+    </div>
+  )
+
+  const q = questions[currentQ]
+
   return (
-    <div className="quiz-container">
-      {/* Your existing Quiz UI logic here */}
-      <button onClick={handleSubmit} disabled={saving}>Submit Quiz</button>
+    <div className="min-h-screen bg-[#050a18] text-white p-6 md:p-12">
+      <div className="max-w-3xl mx-auto">
+        
+        {/* Header */}
+        <div className="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
+          <div>
+            <h1 className="text-xl font-bold">Question {currentQ + 1} of {questions.length}</h1>
+            <p className="text-gray-400 text-sm">{quiz?.title}</p>
+          </div>
+          <div className={`text-xl font-mono ${timeLeft < 60 ? 'text-red-500 animate-pulse' : 'text-blue-400'}`}>
+            {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+          </div>
+        </div>
+
+        {/* Question Area */}
+        {q && (
+          <div className="bg-[#0f172a] border border-gray-800 p-8 rounded-2xl shadow-xl">
+            <h2 className="text-2xl mb-8 leading-relaxed">{q.text}</h2>
+            
+            <textarea
+              className="w-full bg-black/50 border border-gray-700 rounded-xl p-4 h-40 focus:border-blue-500 outline-none transition"
+              placeholder="Type your answer here..."
+              value={answers[q.id] || ''}
+              onChange={(e) => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+            />
+          </div>
+        )}
+
+        {/* Navigation */}
+        <div className="flex justify-between items-center mt-8">
+          <button
+            disabled={currentQ === 0}
+            onClick={() => setCurrentQ(prev => prev - 1)}
+            className="px-6 py-2 text-gray-400 disabled:opacity-0"
+          >
+            Previous
+          </button>
+
+          {currentQ < questions.length - 1 ? (
+            <button
+              onClick={() => setCurrentQ(prev => prev + 1)}
+              className="bg-blue-600 hover:bg-blue-500 px-8 py-2 rounded-lg font-bold transition"
+            >
+              Next Question
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={saving}
+              className="bg-green-600 hover:bg-green-500 px-10 py-2 rounded-lg font-bold transition shadow-lg shadow-green-900/20"
+            >
+              {saving ? 'Submitting...' : 'Finish & Submit'}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
