@@ -1,39 +1,33 @@
 // middleware.ts
+
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  const response = NextResponse.next()
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() {
-          return request.cookies.getAll()
+        get(name: string) {
+          return request.cookies.get(name)?.value
         },
-        setAll(cookiesToSet) {
-          // Write updated cookies back to the request so Server Components see them
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          )
-          // Rebuild response with refreshed cookies for the browser
-          supabaseResponse = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
+        set(name: string, value: string, options: any) {
+          response.cookies.set(name, value, options)
+        },
+        remove(name: string, options: any) {
+          response.cookies.set(name, '', { ...options, maxAge: 0 })
         },
       },
     }
   )
 
-  // IMPORTANT: call getUser() to refresh the session token.
-  // Do NOT add logic between createServerClient and getUser().
+  // refresh session
   await supabase.auth.getUser()
 
-  // Return supabaseResponse (NOT NextResponse.next()) so Set-Cookie headers are forwarded
-  return supabaseResponse
+  return response
 }
 
 export const config = {
