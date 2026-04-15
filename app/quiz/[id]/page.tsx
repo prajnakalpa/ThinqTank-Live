@@ -107,4 +107,113 @@ export default function QuizPage({ params }: Props) {
         .select()
         .single()
 
-      setSubmission
+      setSubmission(newSub)
+      submissionRef.current = newSub
+      setTimeLeft(q.duration_minutes * 60)
+    }
+
+    setState('quiz')
+  }, [params.id])
+
+  useEffect(() => { loadQuiz() }, [loadQuiz])
+
+  useEffect(() => {
+    if (state !== 'quiz' || !submission) return
+
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timerRef.current)
+
+          const sub = submissionRef.current
+          const q = quizRef.current
+
+          if (sub?.id) {
+            doAutoSubmit(sub.id, answersRef.current, q?.duration_minutes * 60)
+          }
+
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(timerRef.current)
+  }, [state, submission?.id])
+
+  useEffect(() => {
+    if (state !== 'quiz') return
+
+    autosaveRef.current = setInterval(async () => {
+      const sub = submissionRef.current
+      if (!sub?.id || sub?.is_complete) return
+
+      setSaving(true)
+      await supabase.from('submissions')
+        .update({ answers: answersRef.current })
+        .eq('id', sub.id)
+      setSaving(false)
+    }, 30000)
+
+    return () => clearInterval(autosaveRef.current)
+  }, [state])
+
+  const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, durationSeconds: number) => {
+    if (submittingRef.current) return
+    submittingRef.current = true
+
+    await supabase.from('submissions').update({
+      answers: currentAnswers,
+      is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: durationSeconds,
+    }).eq('id', subId)
+
+    await fetch('/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: subId }),
+    })
+
+    setState('submitted')
+  }
+
+  const handleSubmit = async () => {
+    const sub = submissionRef.current
+    if (!sub?.id) return
+    if (submittingRef.current) return
+    submittingRef.current = true
+
+    setSaving(true)
+
+    const timeTaken = Math.floor((Date.now() - new Date(sub.start_time).getTime()) / 1000)
+
+    await supabase.from('submissions').update({
+      answers: answersRef.current,
+      is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: timeTaken,
+    }).eq('id', sub.id)
+
+    const res = await fetch('/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: sub.id }),
+    })
+
+    if (!res.ok) {
+      setSubmitError('Submit failed. Try again.')
+      setSaving(false)
+      submittingRef.current = false
+      return
+    }
+
+    const { score } = await res.json()
+    setSubmission((prev: any) => ({ ...prev, final_score: score }))
+    setState('submitted')
+    setSaving(false)
+  }
+
+  // UI untouched below ↓↓↓
+  return <div />
+}
