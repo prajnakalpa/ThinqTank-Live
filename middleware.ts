@@ -35,6 +35,10 @@ export async function middleware(request: NextRequest) {
   // Refreshes the session token if it has expired.
   await supabase.auth.getUser()
 
+  // Inject the current pathname so Server Component layouts can read it
+  // reliably via headers().get('x-pathname') — works on Vercel + localhost
+  supabaseResponse.headers.set('x-pathname', request.nextUrl.pathname)
+
   // IMPORTANT: return supabaseResponse (not a new NextResponse.next())
   // so the Set-Cookie headers with refreshed tokens reach the browser
   return supabaseResponse
