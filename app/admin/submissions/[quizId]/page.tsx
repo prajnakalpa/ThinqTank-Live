@@ -11,9 +11,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
   const [questions, setQuestions] = useState<any[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  // ✅ NEW: logs state
-  const [logs, setLogs] = useState<Record<string, any[]>>({})
-
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<{ id: string; score: string } | null>(null)
   const [csvFile, setCsvFile] = useState<File | null>(null)
@@ -39,26 +36,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
     setActivity(act)
     setSubs(submissions ?? [])
     setQuestions(qs ?? [])
-
-    // ✅ NEW: fetch logs
-    if (submissions?.length) {
-      const ids = submissions.map(s => s.id)
-
-      const { data: logData } = await supabase
-        .from('quiz_logs')
-        .select('*')
-        .in('submission_id', ids)
-
-      const grouped: Record<string, any[]> = {}
-
-      logData?.forEach(log => {
-        if (!grouped[log.submission_id]) grouped[log.submission_id] = []
-        grouped[log.submission_id].push(log)
-      })
-
-      setLogs(grouped)
-    }
-
     setLoading(false)
   }
 
@@ -185,8 +162,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                 ? s.answers
                 : {}
 
-            const submissionLogs = logs[s.id] || [] // ✅ NEW
-
             return (
               <>
                 <tr key={s.id} style={{ opacity: deleting === s.id ? 0.4 : 1 }}>
@@ -225,17 +200,10 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                           )
                         })}
 
-                        {/* ✅ NEW: ANTI-CHEAT LOGS */}
-                        {submissionLogs.length > 0 && (
-                          <div style={{ marginTop: 15 }}>
-                            <strong style={{ color: '#f87171' }}>⚠ Suspicious Activity:</strong>
-                            <ul style={{ fontSize: 12, marginTop: 5 }}>
-                              {submissionLogs.map((log, idx) => (
-                                <li key={idx}>
-                                  {log.event_type} — {new Date(log.created_at).toLocaleTimeString()}
-                                </li>
-                              ))}
-                            </ul>
+                        {/* ✅ SIMPLE ANTI-CHEAT (NO LOG DEPENDENCY) */}
+                        {s.cheat_flag && (
+                          <div style={{ marginTop: 12, color: '#f87171', fontSize: 13 }}>
+                            ⚠ {s.cheat_violations || 1} suspicious actions detected
                           </div>
                         )}
 
