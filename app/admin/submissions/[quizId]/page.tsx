@@ -7,6 +7,9 @@ import { formatDuration } from '@/lib/quiz-state'
 export default function SubmissionsPage({ params }: { params: { quizId: string } }) {
   const [subs, setSubs] = useState<any[]>([])
   const [activity, setActivity] = useState<any>(null)
+  const [questions, setQuestions] = useState<any[]>([]) // NEW
+  const [expanded, setExpanded] = useState<string | null>(null) // NEW
+
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<{ id: string; score: string } | null>(null)
   const [csvFile, setCsvFile] = useState<File | null>(null)
@@ -18,16 +21,28 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
 
   const load = async () => {
     setLoading(true)
-    const [{ data: act }, { data: submissions }] = await Promise.all([
+
+    const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
       supabase.from('activities').select('id, title').eq('id', params.quizId).single(),
       supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
+      supabase
+        .from('questions')
+        .select('id, text, correct_answer')
+        .eq('quiz_id', params.quizId)
+        .order('order_index'), // IMPORTANT FIX
     ])
+
     setActivity(act)
     setSubs(submissions ?? [])
+    setQuestions(qs ?? [])
     setLoading(false)
   }
 
   useEffect(() => { load() }, [params.quizId])
+
+  const toggleExpand = (id: string) => {
+    setExpanded(prev => prev === id ? null : id)
+  }
 
   const saveScore = async () => {
     if (!editing) return
@@ -54,7 +69,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
     })
 
     if (res.ok) {
-      await load() // ✅ FIXED (no optimistic UI)
+      await load()
       setMsg('Submission deleted and leaderboard updated.')
     } else {
       setMsg('Delete failed. Try again.')
@@ -138,18 +153,50 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
           </tr>
         </thead>
         <tbody>
-          {subs.map((s, i) => (
-            <tr key={s.id} style={{ opacity: deleting === s.id ? 0.4 : 1 }}>
-              <td>{i + 1}</td>
-              <td>{s.username}</td>
-              <td>{s.final_score}</td>
-              <td>
-                <button onClick={() => handleDelete(s.id)}>
-                  {deleting === s.id ? '...' : 'Delete'}
-                </button>
-              </td>
-            </tr>
-          ))}
+          {subs.map((s, i) => {
+            const isOpen = expanded === s.id
+
+            // SAFE handling (no crash if null)
+            const answers =
+              typeof s.answers === 'object' && !Array.isArray(s.answers)
+                ? s.answers
+                : {}
+
+            return (
+              <>
+                <tr key={s.id} style={{ opacity: deleting === s.id ? 0.4 : 1 }}>
+                  <td>{i + 1}</td>
+                  <td>{s.username}</td>
+                  <td>{s.final_score}</td>
+                  <td>
+                    <button onClick={() => toggleExpand(s.id)}>
+                      {isOpen ? 'Hide' : 'View'}
+                    </button>
+
+                    <button onClick={() => handleDelete(s.id)}>
+                      {deleting === s.id ? '...' : 'Delete'}
+                    </button>
+                  </td>
+                </tr>
+
+                {isOpen && (
+                  <tr>
+                    <td colSpan={4}>
+                      <div style={{ padding: 10, background: '#0f172a' }}>
+                        {questions.map((q, idx) => (
+                          <div key={q.id} style={{ marginBottom: 10 }}>
+                            <strong>Q{idx + 1}:</strong> {q.text}<br />
+                            <span>User:</span> {answers[q.id] ?? '-'}<br />
+                            <span>Correct:</span> {q.correct_answer}
+                          </div>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
+            )
+          })}
         </tbody>
       </table>
     </div>
