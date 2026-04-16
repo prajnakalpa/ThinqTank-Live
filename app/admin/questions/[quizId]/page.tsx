@@ -1,7 +1,7 @@
 // app/admin/questions/[quizId]/page.tsx
 
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import * as XLSX from 'xlsx'
 
@@ -32,6 +32,7 @@ const blank = (): Q => ({
 })
 
 export default function QuestionsPage({ params }: { params: { quizId: string } }) {
+  // ── EXISTING STATE (UNCHANGED) ────────────────────────────────────────────
   const [questions, setQuestions] = useState<Q[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Q | null>(null)
@@ -39,7 +40,16 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
   const [title, setTitle] = useState('')
   const [importPreview, setImportPreview] = useState<Q[]>([])
 
+  // ── NEW: Isolated Excel state (does NOT touch saving/editing/questions) ───
+  const [xlsxPreview, setXlsxPreview] = useState<Q[]>([])
+  const [xlsxParsing, setXlsxParsing] = useState(false)
+  const [xlsxUploading, setXlsxUploading] = useState(false)
+  const [xlsxError, setXlsxError] = useState('')
+  const xlsxInputRef = useRef<HTMLInputElement>(null)
+
   const supabase = createClient()
+
+  // ── EXISTING HANDLERS (UNCHANGED) ────────────────────────────────────────
 
   const getRealQuizId = async () => {
     const { data } = await supabase
@@ -122,10 +132,80 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     setImportPreview([]); setSaving(false)
   }
 
+  // ── NEW: Isolated Excel handlers ──────────────────────────────────────────
+
+  const handleXlsxFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setXlsxError('')
+    setXlsxParsing(true)
+    try {
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf)
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' })
+
+      const parsed: Q[] = rows
+        .map((r, i) => ({
+          text: String(r.Question ?? '').trim(),
+          correct_answer: String(r.Answer ?? '').trim(),
+          accepted_keywords: r.Keywords
+            ? String(r.Keywords).split(',').map((s: string) => s.trim()).filter(Boolean)
+            : [],
+          synonyms: r.Synonyms
+            ? String(r.Synonyms).split(',').map((s: string) => s.trim()).filter(Boolean)
+            : [],
+          type: validTypes.includes(String(r.Type)) ? String(r.Type) : 'objective_text',
+          strictness_level: validStrictness.includes(String(r.Strictness))
+            ? String(r.Strictness)
+            : 'medium',
+          weightage: Number(r.Weightage) > 0 ? Number(r.Weightage) : 1,
+          order_index: questions.length + i,
+        }))
+        .filter(q => q.text && q.correct_answer)
+
+      if (parsed.length === 0) {
+        setXlsxError('No valid rows found. Ensure columns: Question, Answer, Keywords, Strictness, Type, Weightage')
+      } else {
+        setXlsxPreview(parsed)
+      }
+    } catch {
+      setXlsxError('Failed to parse file. Please use .xlsx or .csv format.')
+    }
+    setXlsxParsing(false)
+    // Reset input so the same file can be re-uploaded if needed
+    if (xlsxInputRef.current) xlsxInputRef.current.value = ''
+  }
+
+  const confirmXlsxUpload = async () => {
+    if (!xlsxPreview.length) return
+    setXlsxUploading(true)
+    setXlsxError('')
+    const qid = await getRealQuizId()
+    const rows = xlsxPreview.map(q => ({ ...q, quiz_id: qid }))
+    const { data, error } = await supabase.from('questions').insert(rows).select()
+    if (error) {
+      setXlsxError(`Upload failed: ${error.message}`)
+    } else if (data) {
+      setQuestions(p => [...p, ...(data as Q[])])
+      setXlsxPreview([])
+    }
+    setXlsxUploading(false)
+  }
+
+  const cancelXlsxUpload = () => {
+    setXlsxPreview([])
+    setXlsxError('')
+    if (xlsxInputRef.current) xlsxInputRef.current.value = ''
+  }
+
+  // ── RENDER ────────────────────────────────────────────────────────────────
+
   if (loading) return <div className="p-8 text-white">Loading...</div>
 
   return (
     <div className="p-8 max-w-5xl mx-auto text-white">
+      {/* ── EXISTING HEADER (UNCHANGED) ────────────────────────────────── */}
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-2xl font-bold">Questions for {title}</h1>
         <div className="flex gap-4">
@@ -136,6 +216,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
         </div>
       </div>
 
+      {/* ── EXISTING importPreview BANNER (UNCHANGED) ──────────────────── */}
       {importPreview.length > 0 && (
         <div className="bg-blue-900/30 border border-blue-500 p-4 mb-6 rounded flex justify-between items-center">
           <span>{importPreview.length} questions ready.</span>
@@ -146,6 +227,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
         </div>
       )}
 
+      {/* ── EXISTING QUESTIONS LIST (UNCHANGED) ────────────────────────── */}
       <div className="grid gap-4">
         {questions.map((q, i) => (
           <div key={q.id} className="bg-gray-900 border border-gray-800 p-4 rounded-lg flex justify-between items-center">
@@ -166,6 +248,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
         ))}
       </div>
 
+      {/* ── EXISTING EDIT MODAL (UNCHANGED) ────────────────────────────── */}
       {editing && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-gray-900 border border-gray-700 p-8 rounded-xl w-full max-w-2xl my-auto">
@@ -223,6 +306,98 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
           </div>
         </div>
       )}
+
+      {/* ── NEW: Excel Upload Section (APPENDED — fully isolated) ─────────
+          State used: xlsxPreview, xlsxParsing, xlsxUploading, xlsxError
+          Does NOT touch: questions, editing, saving, importPreview
+      ──────────────────────────────────────────────────────────────────── */}
+      <div className="mt-12 border-t border-gray-800 pt-8">
+        <h2 className="text-lg font-semibold mb-1">Bulk Upload via Excel</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Required columns: <span className="text-gray-300">Question, Answer</span> — Optional: Keywords, Synonyms, Strictness, Type, Weightage
+        </p>
+
+        {/* File picker */}
+        {xlsxPreview.length === 0 && (
+          <label className="inline-flex items-center gap-3 cursor-pointer">
+            <span className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded font-medium text-sm transition">
+              {xlsxParsing ? 'Parsing…' : 'Choose .xlsx or .csv'}
+            </span>
+            <input
+              ref={xlsxInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleXlsxFile}
+              disabled={xlsxParsing}
+              className="hidden"
+            />
+          </label>
+        )}
+
+        {/* Error */}
+        {xlsxError && (
+          <p className="mt-3 text-sm text-red-400 bg-red-900/20 border border-red-800 px-3 py-2 rounded">
+            {xlsxError}
+          </p>
+        )}
+
+        {/* Preview table */}
+        {xlsxPreview.length > 0 && (
+          <div>
+            <p className="text-sm text-gray-400 mb-3">
+              {xlsxPreview.length} question{xlsxPreview.length !== 1 ? 's' : ''} parsed — review before confirming:
+            </p>
+
+            <div className="overflow-x-auto rounded-lg border border-gray-700">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-800 text-left">
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">#</th>
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">Question</th>
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">Answer</th>
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">Keywords</th>
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">Strictness</th>
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">Type</th>
+                    <th className="px-3 py-2 text-xs text-gray-400 uppercase font-semibold">Wt.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {xlsxPreview.map((q, i) => (
+                    <tr key={i} className="border-t border-gray-800 hover:bg-gray-800/40">
+                      <td className="px-3 py-2 text-gray-500">{i + 1}</td>
+                      <td className="px-3 py-2 max-w-xs truncate" title={q.text}>{q.text}</td>
+                      <td className="px-3 py-2 max-w-xs truncate text-green-400" title={q.correct_answer}>{q.correct_answer}</td>
+                      <td className="px-3 py-2 text-gray-400 text-xs">{q.accepted_keywords.join(', ') || '—'}</td>
+                      <td className="px-3 py-2 text-gray-400">{q.strictness_level}</td>
+                      <td className="px-3 py-2 text-gray-400 text-xs">{q.type}</td>
+                      <td className="px-3 py-2 text-gray-400">{q.weightage}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={confirmXlsxUpload}
+                disabled={xlsxUploading}
+                className="bg-green-600 hover:bg-green-500 disabled:opacity-50 px-6 py-2 rounded font-semibold text-sm transition"
+              >
+                {xlsxUploading ? 'Uploading…' : `Confirm & Upload ${xlsxPreview.length} Question${xlsxPreview.length !== 1 ? 's' : ''}`}
+              </button>
+              <button
+                onClick={cancelXlsxUpload}
+                disabled={xlsxUploading}
+                className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 px-4 py-2 rounded text-sm transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+      {/* ── END NEW Excel Section ──────────────────────────────────────── */}
+
     </div>
   )
 }
