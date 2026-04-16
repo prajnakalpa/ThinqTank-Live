@@ -11,7 +11,6 @@ interface Props { params: { id: string } }
 
 export default function QuizPage({ params }: Props) {
   const [state, setState] = useState<'loading'|'username'|'quiz'|'submitted'|'closed'|'error'>('loading')
-  // FIX: added activity state so we can show the title (quiz row has no title field)
   const [activity, setActivity] = useState<any>(null)
   const [quiz, setQuiz] = useState<any>(null)
   const [questions, setQuestions] = useState<any[]>([])
@@ -20,14 +19,12 @@ export default function QuizPage({ params }: Props) {
   const [timeLeft, setTimeLeft] = useState(0)
   const [saving, setSaving] = useState(false)
   const [currentQ, setCurrentQ] = useState(0)
-  // FIX: username field for the username-entry state
   const [newUsername, setNewUsername] = useState('')
   const [usernameError, setUsernameError] = useState('')
 
   const router = useRouter()
   const supabase = createClient()
 
-  // Refs to prevent stale closures (The "Critical Bug" Fix)
   const timerRef = useRef<NodeJS.Timeout>()
   const answersRef = useRef<Record<string, string>>({})
   const submissionRef = useRef<any>(null)
@@ -67,7 +64,6 @@ export default function QuizPage({ params }: Props) {
 
     if (!act || act.status === 'closed') { setState('closed'); return }
 
-    // FIX: store the activity so we can show its title
     setActivity(act)
 
     const q = act.quizzes
@@ -122,6 +118,43 @@ export default function QuizPage({ params }: Props) {
     return () => clearInterval(timerRef.current)
   }, [state, submission])
 
+  // ✅ ADDITION: Silent anti-cheat logging
+  useEffect(() => {
+    if (state !== 'quiz' || !submissionRef.current?.id) return
+
+    const logViolation = async (type: string) => {
+      try {
+        await fetch('/api/quiz/log-event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            submissionId: submissionRef.current.id,
+            type,
+            timestamp: new Date().toISOString()
+          })
+        })
+      } catch {
+        console.log('Log failed (safe)')
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) logViolation('TAB_SWITCH')
+    }
+
+    const handleBlur = () => {
+      logViolation('WINDOW_BLUR')
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleBlur)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleBlur)
+    }
+  }, [state])
+
   const handleSubmit = async () => {
     if (submittingRef.current) return
     submittingRef.current = true
@@ -143,7 +176,6 @@ export default function QuizPage({ params }: Props) {
     setState('submitted')
   }
 
-  // FIX: username submission handler
   const handleSetUsername = async () => {
     const trimmed = newUsername.trim()
     if (trimmed.length < 3) { setUsernameError('Username must be at least 3 characters.'); return }
@@ -154,11 +186,8 @@ export default function QuizPage({ params }: Props) {
       .update({ username: trimmed, username_locked: true })
       .eq('id', user.id)
     if (error?.code === '23505') { setUsernameError('Username taken. Try another.'); return }
-    // Re-run load so quiz starts with the newly set username
     loadQuiz()
   }
-
-  // --- UI RENDERING ---
 
   if (state === 'loading') return <div className="p-20 text-center">Loading Quiz...</div>
 
@@ -170,7 +199,6 @@ export default function QuizPage({ params }: Props) {
     </div>
   )
 
-  // FIX: handle 'closed' state
   if (state === 'closed') return (
     <div className="p-20 text-center">
       <h1 className="text-3xl font-bold mb-4">Quiz Closed</h1>
@@ -179,7 +207,6 @@ export default function QuizPage({ params }: Props) {
     </div>
   )
 
-  // FIX: handle 'error' state
   if (state === 'error') return (
     <div className="p-20 text-center">
       <h1 className="text-3xl font-bold mb-4">Quiz Not Found</h1>
@@ -188,7 +215,6 @@ export default function QuizPage({ params }: Props) {
     </div>
   )
 
-  // FIX: handle 'username' state — user must choose a username before starting
   if (state === 'username') return (
     <div className="min-h-screen bg-[#050a18] text-white flex items-center justify-center p-6">
       <div className="bg-[#0f172a] border border-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md">
@@ -224,7 +250,6 @@ export default function QuizPage({ params }: Props) {
     <div className="min-h-screen bg-[#050a18] text-white p-6 md:p-12">
       <div className="max-w-3xl mx-auto">
         
-        {/* Header — FIX: use activity?.title instead of quiz?.title */}
         <div className="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
           <div>
             <h1 className="text-xl font-bold">Question {currentQ + 1} of {questions.length}</h1>
@@ -235,7 +260,6 @@ export default function QuizPage({ params }: Props) {
           </div>
         </div>
 
-        {/* Question Area */}
         {q && (
           <div className="bg-[#0f172a] border border-gray-800 p-8 rounded-2xl shadow-xl">
             <h2 className="text-2xl mb-8 leading-relaxed">{q.text}</h2>
@@ -249,7 +273,6 @@ export default function QuizPage({ params }: Props) {
           </div>
         )}
 
-        {/* Navigation */}
         <div className="flex justify-between items-center mt-8">
           <button
             disabled={currentQ === 0}
