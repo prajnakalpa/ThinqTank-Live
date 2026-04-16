@@ -1,4 +1,4 @@
-// app/auth/reset-password/page.tsx
+// app/(auth)/reset-password/page.tsx
 'use client'
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -15,8 +15,14 @@ export default function ResetPasswordPage() {
   const handleReset = async () => {
     if (!email.trim()) return
     setLoading(true); setError('')
+
+    // FIX: the callback route is app/(auth)/callback/route.ts
+    // In Next.js, (auth) is a route group — it does NOT appear in the URL.
+    // The actual URL path is /callback, NOT /auth/callback.
+    // getURL() returns "https://site.com/" (with trailing slash).
+    // So the full redirectTo becomes "https://site.com/callback?type=recovery".
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${getURL()}auth/callback?type=recovery`,
+      redirectTo: `${getURL()}callback?type=recovery`,
     })
     if (error) setError(error.message)
     else setSent(true)
