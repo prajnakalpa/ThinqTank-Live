@@ -1,3 +1,4 @@
+// lib/evaluation.ts
 import levenshtein from 'fast-levenshtein'
 
 export interface Question {
@@ -9,59 +10,157 @@ export interface Question {
   strictness_level: 'strict' | 'medium' | 'loose'
 }
 
-const STRICTNESS_THRESHOLD: Record<string, number> = {
-  strict: 0.92,
-  medium: 0.80,
-  loose: 0.70,
-}
-
+/**
+ * SAFE BASE NORMALIZATION
+ */
 function normalize(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()
+  if (!s) return ''
+
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
 }
 
-function similarity(a: string, b: string): number {
-  const maxLen = Math.max(a.length, b.length)
-  if (maxLen === 0) return 1
-  return 1 - levenshtein.get(a, b) / maxLen
+/**
+ * CONTROLLED PHONETIC NORMALIZATION
+ * Only applied in fallback stage
+ */
+function phoneticNormalize(s: string) {
+  return s
+    .replace(/dny/g, 'gy')
+    .replace(/jn/g, 'gy')
+    .replace(/ee/g, 'i')
+    .replace(/oo/g, 'u')
 }
 
-function matchesTerm(answer: string, term: string, threshold: number): boolean {
-  const normAnswer = normalize(answer)
-  const normTerm = normalize(term)
-  // Exact / contains
-  if (normAnswer === normTerm || normAnswer.includes(normTerm)) return true
-  // Fuzzy
-  return similarity(normAnswer, normTerm) >= threshold
+/**
+ * WORD MATCH (PRIMARY ENGINE)
+ */
+function wordMatch(user: string, target: string, tolerance: number) {
+  const stopWords = ['the', 'a', 'an', 'of', 'in', 'on', 'at']
+
+  const userWords = user.split(' ')
+  const targetWords = target
+    .split(' ')
+    .filter(w => !stopWords.includes(w))
+
+  let matched = 0
+
+  for (const tw of targetWords) {
+    const found = userWords.some(uw => {
+      const dist = levenshtein.get(uw, tw)
+      return dist <= tolerance
+    })
+    if (found) matched++
+  }
+
+  return matched === targetWords.length
 }
 
+/**
+ * CONTROLLED PHONETIC MATCH
+ * Applies ONLY when structure is similar
+ */
+function phoneticMatch(user: string, target: string, tolerance: number) {
+  const ua = normalize(user)
+  const tt = normalize(target)
+
+  const userWords = ua.split(' ')
+  const targetWords = tt.split(' ')
+
+  // SAFETY 1: word count must be close
+  if (Math.abs(userWords.length - targetWords.length) > 1) return false
+
+  // SAFETY 2: avoid short noisy matches
+  if (ua.length < 4 || tt.length < 4) return false
+
+  // Apply phonetic normalization AFTER checks
+  const uaPh = phoneticNormalize(ua)
+  const ttPh = phoneticNormalize(tt)
+
+  const dist = levenshtein.get(uaPh, ttPh)
+
+  return dist <= tolerance
+}
+
+/**
+ * MATCH ENGINE
+ */
+function isMatch(userAnswer: string, targetTerm: string, strictness: string): boolean {
+  const ua = normalize(userAnswer)
+  const tt = normalize(targetTerm)
+
+  if (!ua || !tt) return false
+
+  // STRICT
+  if (strictness === 'strict') {
+    return ua === tt
+  }
+
+  // MEDIUM
+  if (strictness === 'medium') {
+    if (ua === tt) return true
+
+    if (wordMatch(ua, tt, 1)) return true
+
+    // phonetic fallback (tight + controlled)
+    if (phoneticMatch(ua, tt, 1)) return true
+
+    return false
+  }
+
+  // LOOSE
+  if (strictness === 'loose') {
+    if (ua === tt) return true
+
+    if (wordMatch(ua, tt, 2)) return true
+
+    if (phoneticMatch(ua, tt, 2)) return true
+
+    return false
+  }
+
+  return false
+}
+
+/**
+ * EVALUATE SINGLE ANSWER
+ */
 export function evaluateAnswer(question: Question, rawAnswer: string): number {
   if (!rawAnswer?.trim()) return 0
 
-  const threshold = STRICTNESS_THRESHOLD[question.strictness_level]
   const allTerms = [
     question.correct_answer,
-    ...question.accepted_keywords,
-    ...question.synonyms,
+    ...(question.accepted_keywords || []),
+    ...(question.synonyms || []),
   ]
 
   for (const term of allTerms) {
-    if (matchesTerm(rawAnswer, term, threshold)) {
+    if (isMatch(rawAnswer, term, question.strictness_level)) {
       return question.weightage
     }
   }
+
   return 0
 }
 
+/**
+ * EVALUATE FULL SUBMISSION
+ */
 export function evaluateSubmission(
   questions: Question[],
   answers: Record<string, string>
 ): { scores: Record<string, number>; total: number } {
   const scores: Record<string, number> = {}
   let total = 0
+
   for (const q of questions) {
     const pts = evaluateAnswer(q, answers[q.id] || '')
     scores[q.id] = pts
     total += pts
   }
+
   return { scores, total }
 }
