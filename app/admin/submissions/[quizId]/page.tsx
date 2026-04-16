@@ -3,12 +3,13 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatDuration } from '@/lib/quiz-state'
+import { evaluateAnswer } from '@/lib/evaluation' // ✅ ADDED
 
 export default function SubmissionsPage({ params }: { params: { quizId: string } }) {
   const [subs, setSubs] = useState<any[]>([])
   const [activity, setActivity] = useState<any>(null)
-  const [questions, setQuestions] = useState<any[]>([]) // NEW
-  const [expanded, setExpanded] = useState<string | null>(null) // NEW
+  const [questions, setQuestions] = useState<any[]>([])
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<{ id: string; score: string } | null>(null)
@@ -27,9 +28,9 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
       supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
       supabase
         .from('questions')
-        .select('id, text, correct_answer')
+        .select('*') // ✅ CHANGED (needed for scoring)
         .eq('quiz_id', params.quizId)
-        .order('order_index'), // IMPORTANT FIX
+        .order('order_index'),
     ])
 
     setActivity(act)
@@ -156,7 +157,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
           {subs.map((s, i) => {
             const isOpen = expanded === s.id
 
-            // SAFE handling (no crash if null)
             const answers =
               typeof s.answers === 'object' && !Array.isArray(s.answers)
                 ? s.answers
@@ -183,13 +183,21 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                   <tr>
                     <td colSpan={4}>
                       <div style={{ padding: 10, background: '#0f172a' }}>
-                        {questions.map((q, idx) => (
-                          <div key={q.id} style={{ marginBottom: 10 }}>
-                            <strong>Q{idx + 1}:</strong> {q.text}<br />
-                            <span>User:</span> {answers[q.id] ?? '-'}<br />
-                            <span>Correct:</span> {q.correct_answer}
-                          </div>
-                        ))}
+                        {questions.map((q, idx) => {
+                          const userAns = answers[q.id] ?? ''
+                          const score = evaluateAnswer(q, userAns) // ✅ ADDED
+
+                          return (
+                            <div key={q.id} style={{ marginBottom: 10 }}>
+                              <strong>Q{idx + 1}:</strong> {q.text}<br />
+                              <span>User:</span> {userAns || '-'}<br />
+                              <span>Correct:</span> {q.correct_answer}<br />
+                              <span style={{ color: score >= 0.5 ? '#4ade80' : '#ef4444' }}>
+                                Score: {score > 0 ? `+${score}` : '0'}
+                              </span>
+                            </div>
+                          )
+                        })}
                       </div>
                     </td>
                   </tr>
