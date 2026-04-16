@@ -26,11 +26,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     const cookieStore = cookies()
     const verified = cookieStore.get('admin_master_verified')?.value
 
-    // ✅ FIX: detect current path
-    const pathname = headers().get('next-url') || ''
+    // FIX: use x-pathname header injected by middleware — reliable on Vercel + localhost
+    // headers().get('next-url') is NOT a real Next.js header and returns null in production
+    const pathname = headers().get('x-pathname') ?? ''
 
-    // ✅ Skip protection ONLY for unlock page
-    if (!pathname.includes('/admin/unlock') && verified !== '1') {
+    // Skip protection only for the unlock page itself — prevents infinite redirect loop
+    if (!pathname.startsWith('/admin/unlock') && verified !== '1') {
       redirect('/admin/unlock')
     }
   }
