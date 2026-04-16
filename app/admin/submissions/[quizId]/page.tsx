@@ -3,13 +3,16 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatDuration } from '@/lib/quiz-state'
-import { evaluateAnswer } from '@/lib/evaluation' // ✅ ADDED
+import { evaluateAnswer } from '@/lib/evaluation'
 
 export default function SubmissionsPage({ params }: { params: { quizId: string } }) {
   const [subs, setSubs] = useState<any[]>([])
   const [activity, setActivity] = useState<any>(null)
   const [questions, setQuestions] = useState<any[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
+
+  // ✅ NEW: logs state
+  const [logs, setLogs] = useState<Record<string, any[]>>({})
 
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<{ id: string; score: string } | null>(null)
@@ -28,7 +31,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
       supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
       supabase
         .from('questions')
-        .select('*') // ✅ CHANGED (needed for scoring)
+        .select('*')
         .eq('quiz_id', params.quizId)
         .order('order_index'),
     ])
@@ -36,6 +39,26 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
     setActivity(act)
     setSubs(submissions ?? [])
     setQuestions(qs ?? [])
+
+    // ✅ NEW: fetch logs
+    if (submissions?.length) {
+      const ids = submissions.map(s => s.id)
+
+      const { data: logData } = await supabase
+        .from('quiz_logs')
+        .select('*')
+        .in('submission_id', ids)
+
+      const grouped: Record<string, any[]> = {}
+
+      logData?.forEach(log => {
+        if (!grouped[log.submission_id]) grouped[log.submission_id] = []
+        grouped[log.submission_id].push(log)
+      })
+
+      setLogs(grouped)
+    }
+
     setLoading(false)
   }
 
@@ -162,6 +185,8 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                 ? s.answers
                 : {}
 
+            const submissionLogs = logs[s.id] || [] // ✅ NEW
+
             return (
               <>
                 <tr key={s.id} style={{ opacity: deleting === s.id ? 0.4 : 1 }}>
@@ -183,9 +208,10 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                   <tr>
                     <td colSpan={4}>
                       <div style={{ padding: 10, background: '#0f172a' }}>
+                        
                         {questions.map((q, idx) => {
                           const userAns = answers[q.id] ?? ''
-                          const score = evaluateAnswer(q, userAns) // ✅ ADDED
+                          const score = evaluateAnswer(q, userAns)
 
                           return (
                             <div key={q.id} style={{ marginBottom: 10 }}>
@@ -198,6 +224,21 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                             </div>
                           )
                         })}
+
+                        {/* ✅ NEW: ANTI-CHEAT LOGS */}
+                        {submissionLogs.length > 0 && (
+                          <div style={{ marginTop: 15 }}>
+                            <strong style={{ color: '#f87171' }}>⚠ Suspicious Activity:</strong>
+                            <ul style={{ fontSize: 12, marginTop: 5 }}>
+                              {submissionLogs.map((log, idx) => (
+                                <li key={idx}>
+                                  {log.event_type} — {new Date(log.created_at).toLocaleTimeString()}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
                       </div>
                     </td>
                   </tr>
