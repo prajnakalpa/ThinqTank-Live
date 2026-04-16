@@ -1,7 +1,7 @@
 // app/admin/layout.tsx
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import Link from 'next/link'
 
 const NAV = [
@@ -25,7 +25,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (masterPassword) {
     const cookieStore = cookies()
     const verified = cookieStore.get('admin_master_verified')?.value
-    if (verified !== '1') {
+
+    // ✅ FIX: detect current path
+    const pathname = headers().get('next-url') || ''
+
+    // ✅ Skip protection ONLY for unlock page
+    if (!pathname.includes('/admin/unlock') && verified !== '1') {
       redirect('/admin/unlock')
     }
   }
