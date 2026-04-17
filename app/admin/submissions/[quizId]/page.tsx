@@ -105,11 +105,19 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
 
   const load = async () => {
     setLoading(true)
-    const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
-      supabase.from('activities').select('id, title').eq('id', params.quizId).single(),
-      supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
-      supabase.from('questions').select('*').eq('quiz_id', params.quizId).order('order_index'),
-    ])
+    const { data: quizData } = await supabase
+  .from('quizzes')
+  .select('id')
+  .eq('activity_id', params.quizId)
+  .single()
+
+const quizId = quizData?.id
+
+const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
+  supabase.from('activities').select('id, title').eq('id', params.quizId).single(),
+  supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
+  supabase.from('questions').select('*').eq('quiz_id', quizId).order('order_index'),
+])
     setActivity(act)
     setSubs(submissions ?? [])
     setQuestions(qs ?? [])
