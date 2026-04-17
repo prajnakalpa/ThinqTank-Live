@@ -259,7 +259,6 @@ export default function QuizPage({ params }: Props) {
           Displayed on the leaderboard. <strong style={{ color: '#e2e8f0' }}>Cannot be changed later.</strong>
         </p>
         <input
-          className="w-full bg-black/50 border border-gray-700 rounded-xl p-3 focus:border-blue-500 outline-none transition mb-3"
           placeholder="e.g. coolplayer42"
           value={newUsername}
           onChange={e => setNewUsername(e.target.value)}
@@ -325,6 +324,7 @@ export default function QuizPage({ params }: Props) {
             background: urgent ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.1)',
             border: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.2)'}`,
             transition: 'all 0.5s',
+            flexShrink: 0,
           }}>
             <span style={{ fontSize: '0.9rem' }}>⏱</span>
             <span style={{
@@ -406,7 +406,6 @@ export default function QuizPage({ params }: Props) {
                   color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
                   outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
                   fontFamily: 'inherit',
-                  // Focus handled via onFocus/onBlur below
                 }}
                 onFocus={e => {
                   e.target.style.borderColor = 'rgba(99,102,241,0.55)'
@@ -419,8 +418,13 @@ export default function QuizPage({ params }: Props) {
               />
             </div>
 
-            {/* Navigation */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            {/* Navigation
+                FIX: Added className="quiz-nav" to the row and className="quiz-nav-dots"
+                to the dot container. On narrow screens (< 540px) the CSS below wraps
+                the dots onto their own line above the Prev/Next buttons so neither
+                button gets squeezed off-screen.
+            */}
+            <div className="quiz-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
 
               <button
                 disabled={currentQ === 0}
@@ -433,13 +437,14 @@ export default function QuizPage({ params }: Props) {
                   cursor: currentQ === 0 ? 'default' : 'pointer',
                   fontSize: '0.875rem', fontWeight: 600,
                   transition: 'all 0.15s', minHeight: 44,
+                  flexShrink: 0,
                 }}
               >
                 ← Previous
               </button>
 
               {/* Question dot navigator */}
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
+              <div className="quiz-nav-dots" style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
                 {questions.map((_, i) => {
                   const isAnswered = !!answers[questions[i].id]
                   const isCurrent  = i === currentQ
@@ -480,6 +485,7 @@ export default function QuizPage({ params }: Props) {
                     color: '#818cf8', cursor: 'pointer',
                     fontSize: '0.875rem', fontWeight: 700,
                     transition: 'all 0.15s', minHeight: 44,
+                    flexShrink: 0,
                   }}
                 >
                   Next →
@@ -497,6 +503,7 @@ export default function QuizPage({ params }: Props) {
                     boxShadow: '0 4px 16px rgba(34,197,94,0.25)',
                     transition: 'all 0.15s', minHeight: 44,
                     opacity: saving ? 0.7 : 1,
+                    flexShrink: 0,
                   }}
                 >
                   {saving ? 'Submitting…' : '✓ Submit Quiz'}
@@ -514,16 +521,35 @@ export default function QuizPage({ params }: Props) {
         )}
       </div>
 
-      {/* ── Timer urgency animation ── */}
+      {/* ── Animations + responsive nav fix ── */}
       <style>{`
         @keyframes timerPulse {
           0%, 100% { opacity: 1; }
           50%       { opacity: 0.6; }
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /*
+          Mobile nav fix: on screens narrower than 540px the three-column
+          layout (Previous | dots | Next) collapses the dot container to
+          ~8px, making it invisible.
+
+          Fix: wrap dots onto their own full-width row above the buttons.
+          order: -1 places dots before Previous in the DOM flow.
+          No colors, fonts, or visual styles are changed.
+        */
+        @media (max-width: 540px) {
+          .quiz-nav {
+            flex-wrap: wrap;
+            gap: 10px;
+          }
+          .quiz-nav-dots {
+            flex-basis: 100%;
+            order: -1;
+            flex: none;
+          }
+        }
       `}</style>
     </div>
   )
 }
-                      
-                   
