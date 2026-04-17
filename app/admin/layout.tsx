@@ -45,7 +45,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           background: 'rgba(2,6,23,0.95)',
           borderBottom: '1px solid rgba(148,163,184,0.08)',
           backdropFilter: 'blur(20px)',
-          zIndex: 50,
+          zIndex: 100,
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '0 16px',
@@ -63,6 +63,18 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <MobileSidebarToggle />
       </div>
 
+      {/* ── SIDEBAR BACKDROP (tap outside to close on mobile) ── */}
+      {/* Visibility controlled by MobileSidebarToggle via getElementById */}
+      <div
+        id="sidebarBackdrop"
+        style={{
+          display: 'none',
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          zIndex: 90, // below sidebar (95) but above main content
+        }}
+      />
+
       {/* ── SIDEBAR ── */}
       <aside
         id="sidebar"
@@ -76,7 +88,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           flexDirection: 'column',
           position: 'fixed',
           top: 0, bottom: 0, left: 0,
-          zIndex: 40,
+          zIndex: 95,
           overflowY: 'auto',
           transition: 'left 0.25s cubic-bezier(0.4,0,0.2,1)',
         }}
@@ -112,6 +124,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               fontSize: '0.875rem', fontWeight: 500,
               color: '#64748b', textDecoration: 'none',
               transition: 'all 0.15s',
+              minHeight: 44, // touch target
             }}>
               <span style={{ fontSize: '0.9rem', opacity: 0.8 }}>{icon}</span>
               {label}
@@ -151,11 +164,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         {children}
       </main>
 
-      {/* ── RESPONSIVE CSS ── */}
+      {/* ── RESPONSIVE CSS ──
+          CRITICAL: NO !important on #sidebar left — JS inline style must be
+          able to override it via getElementById('sidebar').style.left.
+          With !important, the sidebar CANNOT open on mobile.
+      ── */}
       <style>{`
         @media (max-width: 768px) {
           #mobileTopbar { display: flex !important; }
-          #sidebar { left: -230px !important; box-shadow: 8px 0 32px rgba(0,0,0,0.5); }
+          #sidebar { left: -230px; box-shadow: 8px 0 32px rgba(0,0,0,0.5); }
           #mainContent { margin-left: 0 !important; padding: 72px 1rem 2rem !important; }
         }
         #sidebar a:hover {
