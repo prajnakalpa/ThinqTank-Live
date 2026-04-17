@@ -458,3 +458,60 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                               key={q.id}
                               style={{
                                 background: 'rgba(255,255,
+                                border: '1px solid rgba(148,163,184,0.06)',
+                                borderLeft: `3px solid ${score >= maxPts ? '#22c55e' : score > 0 ? '#f59e0b' : '#374151'}`,
+                                borderRadius: '0 10px 10px 0',
+                                padding: '12px 14px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+                                <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700 }}>
+                                  Q{idx + 1} · {q.text}
+                                </span>
+                                <ScorePip score={score} max={maxPts} />
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                                <div>
+                                  <span style={{ display: 'block', color: '#475569', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>User's Answer</span>
+                                  <span style={{ color: userAns ? '#e2e8f0' : '#334155', fontSize: '0.82rem', fontStyle: userAns ? 'normal' : 'italic' }}>
+                                    {userAns || '(no answer)'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span style={{ display: 'block', color: '#475569', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Expected</span>
+                                  <span style={{ color: '#4ade80', fontSize: '0.82rem' }}>{q.correct_answer}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+
+                    {/* Violations block */}
+                    {s.cheat_flag && (
+                      <div style={{
+                        marginTop: 14, padding: '12px 14px', borderRadius: 10,
+                        background: 'rgba(239,68,68,0.06)',
+                        border: '1px solid rgba(239,68,68,0.15)',
+                      }}>
+                        <p style={{ color: '#f87171', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                          ⚠ Integrity Violations
+                        </p>
+                        <p style={{ color: '#fca5a5', fontSize: '0.82rem' }}>
+                          {s.cheat_violations ?? 1} suspicious event{(s.cheat_violations ?? 1) !== 1 ? 's' : ''} detected during this session
+                          (e.g. tab switches, window focus loss).
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
