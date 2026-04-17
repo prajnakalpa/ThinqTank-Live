@@ -1,7 +1,9 @@
 import type { Metadata } from 'next'
 import './globals.css'
-import Navbar from '@/components/Navbar'
-import Footer from '@/components/Footer'
+
+// ✅ CORRECT PATHS (based on what YOU confirmed)
+import Navbar from '@/components/layout/Navbar'
+import Footer from '@/components/layout/Footer'
 
 export const metadata: Metadata = {
   title: 'ThinqTank Live',
@@ -12,19 +14,15 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0 }}>
-
-        {/* GLOBAL NAVBAR */}
+      <body>
         <Navbar />
 
-        {/* PAGE CONTENT */}
+        {/* spacing so navbar doesn’t overlap */}
         <div style={{ paddingTop: 64 }}>
           {children}
         </div>
 
-        {/* GLOBAL FOOTER */}
         <Footer />
-
       </body>
     </html>
   )
