@@ -457,7 +457,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                             <div
                               key={q.id}
                               style={{
-                                background: 'rgba(255,255,
+                                background: 'rgba(255,255,255,0.02)',
                                 border: '1px solid rgba(148,163,184,0.06)',
                                 borderLeft: `3px solid ${score >= maxPts ? '#22c55e' : score > 0 ? '#f59e0b' : '#374151'}`,
                                 borderRadius: '0 10px 10px 0',
