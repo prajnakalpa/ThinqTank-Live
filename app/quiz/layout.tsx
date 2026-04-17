@@ -1,14 +1,6 @@
-import Navbar from '@/components/layout/Navbar'
-import Footer from '@/components/layout/Footer'
-
-export default function MainLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="noise">
-      <Navbar />
-      <main className="pt-16 min-h-screen">
-        {children}
-      </main>
-      <Footer />
-    </div>
-  )
+// app/quiz/layout.tsx
+// Quiz is a full-screen standalone experience with its own sticky header.
+// No shared Navbar or Footer — they would conflict with the quiz UI.
+export default function QuizLayout({ children }: { children: React.ReactNode }) {
+  return <>{children}</>
 }
