@@ -10,50 +10,49 @@ import { getSecondsRemaining, formatTime } from '@/lib/quiz-state'
 interface Props { params: { id: string } }
 
 export default function QuizPage({ params }: Props) {
-  const [state, setState] = useState<'loading'|'username'|'quiz'|'submitted'|'closed'|'error'>('loading')
-  const [activity, setActivity] = useState<any>(null)
-  const [quiz, setQuiz] = useState<any>(null)
-  const [questions, setQuestions] = useState<any[]>([])
-  const [answers, setAnswers] = useState<Record<string, string>>({})
-  const [submission, setSubmission] = useState<any>(null)
-  const [timeLeft, setTimeLeft] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [currentQ, setCurrentQ] = useState(0)
-  const [newUsername, setNewUsername] = useState('')
+  const [state,         setState]         = useState<'loading'|'username'|'quiz'|'submitted'|'closed'|'error'>('loading')
+  const [activity,      setActivity]      = useState<any>(null)
+  const [quiz,          setQuiz]          = useState<any>(null)
+  const [questions,     setQuestions]     = useState<any[]>([])
+  const [answers,       setAnswers]       = useState<Record<string, string>>({})
+  const [submission,    setSubmission]    = useState<any>(null)
+  const [timeLeft,      setTimeLeft]      = useState(0)
+  const [saving,        setSaving]        = useState(false)
+  const [currentQ,      setCurrentQ]      = useState(0)
+  const [newUsername,   setNewUsername]   = useState('')
   const [usernameError, setUsernameError] = useState('')
 
-  const router = useRouter()
+  const router   = useRouter()
   const supabase = createClient()
 
-  const timerRef = useRef<NodeJS.Timeout>()
-  const answersRef = useRef<Record<string, string>>({})
-  const submissionRef = useRef<any>(null)
-  const quizRef = useRef<any>(null)
-  const submittingRef = useRef(false)
+  // ── Refs (anti-stale-closure + Silent Sentinel scope) ──────────────────
+  const timerRef       = useRef<NodeJS.Timeout>()
+  const answersRef     = useRef<Record<string, string>>({})
+  const submissionRef  = useRef<any>(null)
+  const quizRef        = useRef<any>(null)
+  const submittingRef  = useRef(false)
 
-  useEffect(() => { answersRef.current = answers }, [answers])
+  useEffect(() => { answersRef.current   = answers    }, [answers])
   useEffect(() => { submissionRef.current = submission }, [submission])
-  useEffect(() => { quizRef.current = quiz }, [quiz])
+  useEffect(() => { quizRef.current      = quiz       }, [quiz])
 
+  // ── Auto-submit ────────────────────────────────────────────────────────
   const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
     if (submittingRef.current) return
     submittingRef.current = true
-    
     await supabase.from('submissions').update({
-      answers: currentAnswers,
-      is_complete: true,
+      answers: currentAnswers, is_complete: true,
       submission_time: new Date().toISOString(),
       time_taken_seconds: duration,
     }).eq('id', subId)
-
     await fetch('/api/quiz/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ submissionId: subId }),
     })
     setState('submitted')
   }
 
+  // ── Load quiz ──────────────────────────────────────────────────────────
   const loadQuiz = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push(`/login?redirect=/quiz/${params.id}`); return }
@@ -65,9 +64,7 @@ export default function QuizPage({ params }: Props) {
     if (!act || act.status === 'closed') { setState('closed'); return }
 
     setActivity(act)
-
-    const q = act.quizzes
-    setQuiz(q)
+    const q  = act.quizzes; setQuiz(q)
     const qs = (q?.questions ?? []).sort((a: any, b: any) => a.order_index - b.order_index)
     setQuestions(qs)
 
@@ -84,10 +81,7 @@ export default function QuizPage({ params }: Props) {
       setSubmission(existingSub)
       setAnswers(existingSub.answers ?? {})
       const remaining = getSecondsRemaining(existingSub.start_time, q.duration_minutes * 60)
-      if (remaining <= 0) {
-        doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60)
-        return
-      }
+      if (remaining <= 0) { doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60); return }
       setTimeLeft(remaining)
     } else {
       const { data: newSub } = await supabase.from('submissions').insert({
@@ -102,7 +96,7 @@ export default function QuizPage({ params }: Props) {
 
   useEffect(() => { loadQuiz() }, [loadQuiz])
 
-  // Timer loop
+  // ── Timer ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (state !== 'quiz' || !submission) return
     timerRef.current = setInterval(() => {
@@ -118,33 +112,26 @@ export default function QuizPage({ params }: Props) {
     return () => clearInterval(timerRef.current)
   }, [state, submission])
 
-  // ✅ ADDITION: Silent anti-cheat logging
+  // ── ✅ SILENT SENTINEL — DO NOT MOVE OR REFACTOR ─────────────────────
+  // Anti-cheat event listeners. submissionRef + answersRef must remain in parent scope.
   useEffect(() => {
     if (state !== 'quiz' || !submissionRef.current?.id) return
 
     const logViolation = async (type: string) => {
       try {
         await fetch('/api/quiz/log-event', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             submissionId: submissionRef.current.id,
             type,
             timestamp: new Date().toISOString()
           })
         })
-      } catch {
-        console.log('Log failed (safe)')
-      }
+      } catch { /* safe — non-critical */ }
     }
 
-    const handleVisibilityChange = () => {
-      if (document.hidden) logViolation('TAB_SWITCH')
-    }
-
-    const handleBlur = () => {
-      logViolation('WINDOW_BLUR')
-    }
+    const handleVisibilityChange = () => { if (document.hidden) logViolation('TAB_SWITCH') }
+    const handleBlur = () => { logViolation('WINDOW_BLUR') }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('blur', handleBlur)
@@ -154,74 +141,122 @@ export default function QuizPage({ params }: Props) {
       window.removeEventListener('blur', handleBlur)
     }
   }, [state])
+  // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
+  // ── Submit ─────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (submittingRef.current) return
     submittingRef.current = true
     setSaving(true)
-    
     const timeTaken = Math.floor((Date.now() - new Date(submission.start_time).getTime()) / 1000)
     await supabase.from('submissions').update({
-      answers: answersRef.current,
-      is_complete: true,
+      answers: answersRef.current, is_complete: true,
       submission_time: new Date().toISOString(),
       time_taken_seconds: timeTaken,
     }).eq('id', submission.id)
-
     await fetch('/api/quiz/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ submissionId: submission.id }),
     })
     setState('submitted')
   }
 
+  // ── Username ───────────────────────────────────────────────────────────
   const handleSetUsername = async () => {
     const trimmed = newUsername.trim()
-    if (trimmed.length < 3) { setUsernameError('Username must be at least 3 characters.'); return }
+    if (trimmed.length < 3) { setUsernameError('At least 3 characters.'); return }
     setUsernameError('')
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const { error } = await supabase.from('users')
-      .update({ username: trimmed, username_locked: true })
-      .eq('id', user.id)
+      .update({ username: trimmed, username_locked: true }).eq('id', user.id)
     if (error?.code === '23505') { setUsernameError('Username taken. Try another.'); return }
     loadQuiz()
   }
 
-  if (state === 'loading') return <div className="p-20 text-center">Loading Quiz...</div>
+  // ── Derived ────────────────────────────────────────────────────────────
+  const urgent      = timeLeft > 0 && timeLeft < 60
+  const answered    = Object.values(answers).filter(Boolean).length
+  const q           = questions[currentQ]
+  const mins        = Math.floor(timeLeft / 60)
+  const secs        = (timeLeft % 60).toString().padStart(2, '0')
+
+  // ── State screens ──────────────────────────────────────────────────────
+
+  if (state === 'loading') return (
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: '50%', margin: '0 auto 16px',
+          border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        <p style={{ color: '#475569', fontSize: '0.875rem' }}>Loading quiz…</p>
+      </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+    </div>
+  )
 
   if (state === 'submitted') return (
-    <div className="p-20 text-center">
-      <h1 className="text-3xl font-bold mb-4">Quiz Submitted!</h1>
-      <p>Thank you for participating.</p>
-      <button onClick={() => router.push('/')} className="mt-6 bg-blue-600 px-6 py-2 rounded">Go Home</button>
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{
+        maxWidth: 440, width: '100%', textAlign: 'center',
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
+        borderRadius: 20, padding: '2.5rem',
+      }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#f1f5f9', marginBottom: 8 }}>
+          Quiz Submitted!
+        </h1>
+        <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>Your responses have been recorded. Good luck!</p>
+        <button
+          onClick={() => router.push('/')}
+          style={{
+            padding: '10px 28px', borderRadius: 10,
+            background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+            border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer',
+          }}
+        >
+          Back to Home
+        </button>
+      </div>
     </div>
   )
 
   if (state === 'closed') return (
-    <div className="p-20 text-center">
-      <h1 className="text-3xl font-bold mb-4">Quiz Closed</h1>
-      <p className="text-gray-400">This quiz is no longer accepting submissions.</p>
-      <button onClick={() => router.push('/live')} className="mt-6 bg-blue-600 px-6 py-2 rounded">Back to Live</button>
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{ maxWidth: 440, width: '100%', textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>🔒</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.4rem', color: '#f1f5f9', marginBottom: 8 }}>Quiz Closed</h1>
+        <p style={{ color: '#475569', marginBottom: '1.5rem' }}>This quiz is no longer accepting submissions.</p>
+        <button onClick={() => router.push('/live')} style={{ padding: '10px 24px', borderRadius: 9, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>Back to Live</button>
+      </div>
     </div>
   )
 
   if (state === 'error') return (
-    <div className="p-20 text-center">
-      <h1 className="text-3xl font-bold mb-4">Quiz Not Found</h1>
-      <p className="text-gray-400">This quiz does not exist or is unavailable.</p>
-      <button onClick={() => router.push('/live')} className="mt-6 bg-blue-600 px-6 py-2 rounded">Back to Live</button>
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{ maxWidth: 440, width: '100%', textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>❌</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.4rem', color: '#f1f5f9', marginBottom: 8 }}>Quiz Not Found</h1>
+        <button onClick={() => router.push('/live')} style={{ padding: '10px 24px', borderRadius: 9, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>Back to Live</button>
+      </div>
     </div>
   )
 
   if (state === 'username') return (
-    <div className="min-h-screen bg-[#050a18] text-white flex items-center justify-center p-6">
-      <div className="bg-[#0f172a] border border-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md">
-        <h1 className="text-2xl font-bold mb-2">Choose your username</h1>
-        <p className="text-gray-400 text-sm mb-6">
-          This will appear on the leaderboard.{' '}
-          <strong className="text-white">Cannot be changed later.</strong>
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{
+        maxWidth: 440, width: '100%',
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
+        borderRadius: 20, padding: '2rem',
+      }}>
+        <div style={{ height: 2, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', borderRadius: 99, marginBottom: '1.5rem' }} />
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.3rem', color: '#f1f5f9', marginBottom: 6 }}>
+          Choose your username
+        </h1>
+        <p style={{ color: '#64748b', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+          Displayed on the leaderboard. <strong style={{ color: '#e2e8f0' }}>Cannot be changed later.</strong>
         </p>
         <input
           className="w-full bg-black/50 border border-gray-700 rounded-xl p-3 focus:border-blue-500 outline-none transition mb-3"
@@ -231,75 +266,264 @@ export default function QuizPage({ params }: Props) {
           onKeyDown={e => e.key === 'Enter' && handleSetUsername()}
           maxLength={20}
           autoFocus
+          style={{
+            width: '100%', background: 'rgba(15,23,42,0.8)',
+            border: '1px solid rgba(148,163,184,0.12)', borderRadius: 10,
+            padding: '11px 14px', color: '#f1f5f9', fontSize: '0.95rem',
+            outline: 'none', marginBottom: 10,
+          }}
         />
-        {usernameError && <p className="text-red-400 text-sm mb-3">{usernameError}</p>}
+        {usernameError && (
+          <p style={{ color: '#f87171', fontSize: '0.82rem', marginBottom: 10 }}>{usernameError}</p>
+        )}
         <button
           onClick={handleSetUsername}
           disabled={newUsername.trim().length < 3}
-          className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 py-2 rounded-lg font-bold transition"
+          style={{
+            width: '100%', padding: '11px', borderRadius: 10,
+            background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+            border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem',
+            cursor: newUsername.trim().length < 3 ? 'not-allowed' : 'pointer',
+            opacity: newUsername.trim().length < 3 ? 0.5 : 1,
+            minHeight: 44,
+          }}
         >
-          Confirm & Start Quiz
+          Confirm & Start Quiz →
         </button>
       </div>
     </div>
   )
 
-  const q = questions[currentQ]
+  // ── Main quiz UI ───────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-[#050a18] text-white p-6 md:p-12">
-      <div className="max-w-3xl mx-auto">
-        
-        <div className="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
-          <div>
-            <h1 className="text-xl font-bold">Question {currentQ + 1} of {questions.length}</h1>
-            <p className="text-gray-400 text-sm">{activity?.title}</p>
+    <div style={{ minHeight: '100vh', background: '#020617', color: '#f1f5f9' }}>
+
+      {/* ── STICKY HEADER BAR ── */}
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 20,
+        background: 'rgba(2,6,23,0.92)', backdropFilter: 'blur(20px)',
+        borderBottom: '1px solid rgba(148,163,184,0.08)',
+        padding: '0 1.5rem',
+      }}>
+        <div style={{ maxWidth: 720, margin: '0 auto', height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+
+          {/* Quiz name */}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              {activity?.title}
+            </p>
+            <p style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: 1 }}>
+              Q{currentQ + 1} of {questions.length} · {answered} answered
+            </p>
           </div>
-          <div className={`text-xl font-mono ${timeLeft < 60 ? 'text-red-500 animate-pulse' : 'text-blue-400'}`}>
-            {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+
+          {/* Timer */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 7,
+            padding: '6px 14px', borderRadius: 10,
+            background: urgent ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.1)',
+            border: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.2)'}`,
+            transition: 'all 0.5s',
+          }}>
+            <span style={{ fontSize: '0.9rem' }}>⏱</span>
+            <span style={{
+              fontFamily: 'monospace', fontWeight: 700, fontSize: '1.05rem',
+              color: urgent ? '#f87171' : '#818cf8',
+              animation: urgent ? 'timerPulse 1s ease-in-out infinite' : 'none',
+            }}>
+              {mins}:{secs}
+            </span>
           </div>
+
+          {/* Progress fraction */}
+          <span style={{ color: '#334155', fontSize: '0.75rem', fontFamily: 'monospace', flexShrink: 0 }}>
+            {currentQ + 1}/{questions.length}
+          </span>
         </div>
 
-        {q && (
-          <div className="bg-[#0f172a] border border-gray-800 p-8 rounded-2xl shadow-xl">
-            <h2 className="text-2xl mb-8 leading-relaxed">{q.text}</h2>
-            
-            <textarea
-              className="w-full bg-black/50 border border-gray-700 rounded-xl p-4 h-40 focus:border-blue-500 outline-none transition"
-              placeholder="Type your answer here..."
-              value={answers[q.id] || ''}
-              onChange={(e) => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-            />
-          </div>
-        )}
-
-        <div className="flex justify-between items-center mt-8">
-          <button
-            disabled={currentQ === 0}
-            onClick={() => setCurrentQ(prev => prev - 1)}
-            className="px-6 py-2 text-gray-400 disabled:opacity-0"
-          >
-            Previous
-          </button>
-
-          {currentQ < questions.length - 1 ? (
-            <button
-              onClick={() => setCurrentQ(prev => prev + 1)}
-              className="bg-blue-600 hover:bg-blue-500 px-8 py-2 rounded-lg font-bold transition"
-            >
-              Next Question
-            </button>
-          ) : (
-            <button
-              onClick={handleSubmit}
-              disabled={saving}
-              className="bg-green-600 hover:bg-green-500 px-10 py-2 rounded-lg font-bold transition shadow-lg shadow-green-900/20"
-            >
-              {saving ? 'Submitting...' : 'Finish & Submit'}
-            </button>
-          )}
+        {/* Progress bar */}
+        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', margin: '0 1.5rem' }}>
+          <div style={{
+            height: '100%',
+            background: urgent
+              ? 'linear-gradient(90deg,#ef4444,#f87171)'
+              : 'linear-gradient(90deg,#6366f1,#8b5cf6)',
+            width: `${((currentQ + 1) / Math.max(questions.length, 1)) * 100}%`,
+            transition: 'width 0.3s ease, background 0.5s',
+            borderRadius: 99,
+          }} />
         </div>
       </div>
+
+      {/* ── QUESTION CONTENT ── */}
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '2rem 1.5rem 6rem' }}>
+
+        {q ? (
+          <>
+            {/* Question card */}
+            <div style={{
+              background: 'rgba(15,23,42,0.8)',
+              border: '1px solid rgba(148,163,184,0.1)',
+              borderRadius: 16, padding: '1.75rem 2rem',
+              marginBottom: '1.5rem',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1rem' }}>
+                <span style={{
+                  background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)',
+                  color: '#818cf8', borderRadius: 7, padding: '3px 9px',
+                  fontSize: '0.72rem', fontWeight: 700,
+                }}>
+                  Q{currentQ + 1}
+                </span>
+                {q.weightage > 1 && (
+                  <span style={{ color: '#f59e0b', fontSize: '0.72rem', fontWeight: 600 }}>
+                    {q.weightage} pts
+                  </span>
+                )}
+              </div>
+
+              <p style={{
+                fontSize: '1.1rem', lineHeight: 1.75,
+                color: '#e2e8f0', fontWeight: 400,
+                marginBottom: '1.5rem',
+              }}>
+                {q.text}
+              </p>
+
+              {/* Answer textarea */}
+              <textarea
+                value={answers[q.id] || ''}
+                onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+                placeholder="Type your answer here…"
+                rows={5}
+                style={{
+                  width: '100%', resize: 'vertical',
+                  background: 'rgba(2,6,23,0.7)',
+                  border: '1.5px solid rgba(148,163,184,0.1)',
+                  borderRadius: 12, padding: '14px 16px',
+                  color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
+                  outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
+                  fontFamily: 'inherit',
+                  // Focus handled via onFocus/onBlur below
+                }}
+                onFocus={e => {
+                  e.target.style.borderColor = 'rgba(99,102,241,0.55)'
+                  e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)'
+                }}
+                onBlur={e => {
+                  e.target.style.borderColor = 'rgba(148,163,184,0.1)'
+                  e.target.style.boxShadow = 'none'
+                }}
+              />
+            </div>
+
+            {/* Navigation */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+
+              <button
+                disabled={currentQ === 0}
+                onClick={() => setCurrentQ(p => p - 1)}
+                style={{
+                  padding: '10px 20px', borderRadius: 10,
+                  background: 'transparent',
+                  border: '1px solid rgba(148,163,184,0.12)',
+                  color: currentQ === 0 ? '#1e293b' : '#94a3b8',
+                  cursor: currentQ === 0 ? 'default' : 'pointer',
+                  fontSize: '0.875rem', fontWeight: 600,
+                  transition: 'all 0.15s', minHeight: 44,
+                }}
+              >
+                ← Previous
+              </button>
+
+              {/* Question dot navigator */}
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
+                {questions.map((_, i) => {
+                  const isAnswered = !!answers[questions[i].id]
+                  const isCurrent  = i === currentQ
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setCurrentQ(i)}
+                      title={`Q${i + 1}`}
+                      style={{
+                        width: 30, height: 30, borderRadius: 8,
+                        border: 'none', cursor: 'pointer',
+                        fontSize: '0.7rem', fontWeight: 700,
+                        background: isCurrent
+                          ? '#6366f1'
+                          : isAnswered
+                            ? 'rgba(34,197,94,0.2)'
+                            : 'rgba(255,255,255,0.05)',
+                        color: isCurrent ? '#fff' : isAnswered ? '#4ade80' : '#475569',
+                        outline: isCurrent ? '2px solid rgba(99,102,241,0.4)' : 'none',
+                        outlineOffset: 2,
+                        transition: 'all 0.15s',
+                        minHeight: 30,
+                      }}
+                    >
+                      {i + 1}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {currentQ < questions.length - 1 ? (
+                <button
+                  onClick={() => setCurrentQ(p => p + 1)}
+                  style={{
+                    padding: '10px 20px', borderRadius: 10,
+                    background: 'rgba(99,102,241,0.15)',
+                    border: '1px solid rgba(99,102,241,0.25)',
+                    color: '#818cf8', cursor: 'pointer',
+                    fontSize: '0.875rem', fontWeight: 700,
+                    transition: 'all 0.15s', minHeight: 44,
+                  }}
+                >
+                  Next →
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={saving}
+                  style={{
+                    padding: '10px 22px', borderRadius: 10,
+                    background: saving ? 'rgba(34,197,94,0.4)' : 'linear-gradient(135deg,#22c55e,#16a34a)',
+                    border: 'none', color: '#fff',
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem', fontWeight: 700,
+                    boxShadow: '0 4px 16px rgba(34,197,94,0.25)',
+                    transition: 'all 0.15s', minHeight: 44,
+                    opacity: saving ? 0.7 : 1,
+                  }}
+                >
+                  {saving ? 'Submitting…' : '✓ Submit Quiz'}
+                </button>
+              )}
+            </div>
+
+            {/* Answered count */}
+            <p style={{ textAlign: 'center', color: '#334155', fontSize: '0.72rem', marginTop: '1.25rem' }}>
+              {answered} of {questions.length} answered
+            </p>
+          </>
+        ) : (
+          <p style={{ color: '#475569', textAlign: 'center', paddingTop: '4rem' }}>No questions found.</p>
+        )}
+      </div>
+
+      {/* ── Timer urgency animation ── */}
+      <style>{`
+        @keyframes timerPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.6; }
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   )
 }
+                      
+                   
