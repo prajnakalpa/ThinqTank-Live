@@ -49,7 +49,12 @@ export default function Navbar() {
 
   return (
     <nav style={{
-      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50, transition: 'all 0.3s',
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 100, // ✅ FIX 1: increased z-index
+      transition: 'all 0.3s',
       background: scrolled ? 'rgba(2,6,23,0.9)' : 'transparent',
       backdropFilter: scrolled ? 'blur(20px)' : 'none',
       borderBottom: scrolled ? '1px solid rgba(148,163,184,0.08)' : '1px solid transparent',
@@ -110,11 +115,41 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {open && (
-        <div style={{ borderTop: '1px solid rgba(148,163,184,0.08)', background: 'rgba(2,6,23,0.97)', backdropFilter: 'blur(20px)', padding: '12px 16px 16px' }}>
+        <div style={{
+          position: 'fixed', // ✅ FIX 2: make it fixed
+          top: 64,           // below navbar
+          left: 0,
+          right: 0,
+          zIndex: 200,       // ✅ FIX 3: above everything
+          borderTop: '1px solid rgba(148,163,184,0.08)',
+          background: 'rgba(2,6,23,0.97)',
+          backdropFilter: 'blur(20px)',
+          padding: '12px 16px 16px',
+        }}>
           {NAV_LINKS.map(({ href, label }) => (
-            <Link key={href} href={href} onClick={() => setOpen(false)} style={{ display: 'block', padding: '10px 14px', borderRadius: 8, color: path === href ? '#e2e8f0' : '#64748b', background: path === href ? 'rgba(139,92,246,0.1)' : 'transparent', textDecoration: 'none', fontSize: '0.9rem', marginBottom: 2 }}>{label}</Link>
+            <Link key={href} href={href} onClick={() => setOpen(false)} style={{
+              display: 'block',
+              padding: '12px 14px', // slightly larger tap area (no visual change)
+              borderRadius: 8,
+              color: path === href ? '#e2e8f0' : '#64748b',
+              background: path === href ? 'rgba(139,92,246,0.1)' : 'transparent',
+              textDecoration: 'none',
+              fontSize: '0.9rem',
+              marginBottom: 4,
+            }}>{label}</Link>
           ))}
-          {isAdmin && <Link href="/admin" onClick={() => setOpen(false)} style={{ display: 'block', padding: '10px 14px', borderRadius: 8, color: '#a78bfa', textDecoration: 'none', fontSize: '0.9rem' }}>Admin Dashboard</Link>}
+          {isAdmin && (
+            <Link href="/admin" onClick={() => setOpen(false)} style={{
+              display: 'block',
+              padding: '12px 14px',
+              borderRadius: 8,
+              color: '#a78bfa',
+              textDecoration: 'none',
+              fontSize: '0.9rem'
+            }}>
+              Admin Dashboard
+            </Link>
+          )}
         </div>
       )}
     </nav>
