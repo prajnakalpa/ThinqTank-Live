@@ -349,8 +349,8 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <input
                           type="number"
-                          value={editing.score}
-                          onChange={e => setEditing({ ...editing, score: e.target.value })}
+                          value={editing?.score || ''}
+                          onChange={e => editing && setEditing({ ...editing, score: e.target.value })}
                           onKeyDown={e => e.key === 'Enter' && saveScore()}
                           style={{
                             width: 72, padding: '5px 8px', borderRadius: 7,
