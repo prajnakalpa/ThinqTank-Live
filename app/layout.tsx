@@ -1,9 +1,12 @@
+// app/layout.tsx
+// Root layout — HTML shell ONLY.
+// Each route group manages its own navigation:
+//   app/(main)/layout.tsx  → Navbar + Footer for public pages
+//   app/admin/layout.tsx   → sidebar nav for admin pages
+//   app/quiz/layout.tsx    → standalone (full-screen quiz, no nav)
+//   app/(auth)/layout.tsx  → standalone (full-screen auth pages, no nav)
 import type { Metadata } from 'next'
 import './globals.css'
-
-// ✅ CORRECT PATHS (based on what YOU confirmed)
-import Navbar from '@/components/layout/Navbar'
-import Footer from '@/components/layout/Footer'
 
 export const metadata: Metadata = {
   title: 'ThinqTank Live',
@@ -14,16 +17,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <Navbar />
-
-        {/* spacing so navbar doesn’t overlap */}
-        <div style={{ paddingTop: 64 }}>
-          {children}
-        </div>
-
-        <Footer />
-      </body>
+      <body>{children}</body>
     </html>
   )
 }
