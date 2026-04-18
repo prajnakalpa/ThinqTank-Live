@@ -303,32 +303,32 @@ export default function QuizPage({ params }: Props) {
         position: 'sticky', top: 0, zIndex: 20,
         background: 'rgba(2,6,23,0.92)', backdropFilter: 'blur(20px)',
         borderBottom: '1px solid rgba(148,163,184,0.08)',
-        padding: '0 1.5rem',
+        padding: '0 1rem',
       }}>
-        <div style={{ maxWidth: 720, margin: '0 auto', height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ maxWidth: 720, margin: '0 auto', height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
 
           {/* Quiz name */}
           <div style={{ minWidth: 0, flex: 1 }}>
-            <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {activity?.title}
             </p>
-            <p style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: 1 }}>
-              Q{currentQ + 1} of {questions.length} · {answered} answered
+            <p style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: 1 }}>
+              Q{currentQ + 1}/{questions.length} · {answered} answered
             </p>
           </div>
 
           {/* Timer */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 7,
-            padding: '6px 14px', borderRadius: 10,
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '5px 10px', borderRadius: 10,
             background: urgent ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.1)',
             border: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.2)'}`,
             transition: 'all 0.5s',
             flexShrink: 0,
           }}>
-            <span style={{ fontSize: '0.9rem' }}>⏱</span>
+            <span style={{ fontSize: '0.85rem' }}>⏱</span>
             <span style={{
-              fontFamily: 'monospace', fontWeight: 700, fontSize: '1.05rem',
+              fontFamily: 'monospace', fontWeight: 700, fontSize: '0.95rem',
               color: urgent ? '#f87171' : '#818cf8',
               animation: urgent ? 'timerPulse 1s ease-in-out infinite' : 'none',
             }}>
@@ -337,13 +337,13 @@ export default function QuizPage({ params }: Props) {
           </div>
 
           {/* Progress fraction */}
-          <span style={{ color: '#334155', fontSize: '0.75rem', fontFamily: 'monospace', flexShrink: 0 }}>
+          <span style={{ color: '#334155', fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>
             {currentQ + 1}/{questions.length}
           </span>
         </div>
 
         {/* Progress bar */}
-        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', margin: '0 1.5rem' }}>
+        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', margin: '0 1rem' }}>
           <div style={{
             height: '100%',
             background: urgent
@@ -357,7 +357,7 @@ export default function QuizPage({ params }: Props) {
       </div>
 
       {/* ── QUESTION CONTENT ── */}
-      <div style={{ maxWidth: 720, margin: '0 auto', padding: '2rem 1.5rem 6rem' }}>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '1.5rem 1rem 6rem' }}>
 
         {q ? (
           <>
@@ -365,11 +365,11 @@ export default function QuizPage({ params }: Props) {
             <div style={{
               background: 'rgba(15,23,42,0.8)',
               border: '1px solid rgba(148,163,184,0.1)',
-              borderRadius: 16, padding: '1.75rem 2rem',
-              marginBottom: '1.5rem',
+              borderRadius: 16, padding: '1.25rem 1.25rem',
+              marginBottom: '1.25rem',
               boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.875rem' }}>
                 <span style={{
                   background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)',
                   color: '#818cf8', borderRadius: 7, padding: '3px 9px',
@@ -385,9 +385,9 @@ export default function QuizPage({ params }: Props) {
               </div>
 
               <p style={{
-                fontSize: '1.1rem', lineHeight: 1.75,
+                fontSize: '1rem', lineHeight: 1.7,
                 color: '#e2e8f0', fontWeight: 400,
-                marginBottom: '1.5rem',
+                marginBottom: '1.25rem',
               }}>
                 {q.text}
               </p>
@@ -397,12 +397,12 @@ export default function QuizPage({ params }: Props) {
                 value={answers[q.id] || ''}
                 onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
                 placeholder="Type your answer here…"
-                rows={5}
+                rows={4}
                 style={{
                   width: '100%', resize: 'vertical',
                   background: 'rgba(2,6,23,0.7)',
                   border: '1.5px solid rgba(148,163,184,0.1)',
-                  borderRadius: 12, padding: '14px 16px',
+                  borderRadius: 12, padding: '12px 14px',
                   color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
                   outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
                   fontFamily: 'inherit',
@@ -418,19 +418,14 @@ export default function QuizPage({ params }: Props) {
               />
             </div>
 
-            {/* Navigation
-                FIX: Added className="quiz-nav" to the row and className="quiz-nav-dots"
-                to the dot container. On narrow screens (< 540px) the CSS below wraps
-                the dots onto their own line above the Prev/Next buttons so neither
-                button gets squeezed off-screen.
-            */}
-            <div className="quiz-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            {/* Navigation — responsive: dots wrap above buttons on narrow screens */}
+            <div className="quiz-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
 
               <button
                 disabled={currentQ === 0}
                 onClick={() => setCurrentQ(p => p - 1)}
                 style={{
-                  padding: '10px 20px', borderRadius: 10,
+                  padding: '10px 16px', borderRadius: 10,
                   background: 'transparent',
                   border: '1px solid rgba(148,163,184,0.12)',
                   color: currentQ === 0 ? '#1e293b' : '#94a3b8',
@@ -440,11 +435,11 @@ export default function QuizPage({ params }: Props) {
                   flexShrink: 0,
                 }}
               >
-                ← Previous
+                ← Prev
               </button>
 
               {/* Question dot navigator */}
-              <div className="quiz-nav-dots" style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
+              <div className="quiz-nav-dots" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
                 {questions.map((_, i) => {
                   const isAnswered = !!answers[questions[i].id]
                   const isCurrent  = i === currentQ
@@ -479,7 +474,7 @@ export default function QuizPage({ params }: Props) {
                 <button
                   onClick={() => setCurrentQ(p => p + 1)}
                   style={{
-                    padding: '10px 20px', borderRadius: 10,
+                    padding: '10px 16px', borderRadius: 10,
                     background: 'rgba(99,102,241,0.15)',
                     border: '1px solid rgba(99,102,241,0.25)',
                     color: '#818cf8', cursor: 'pointer',
@@ -495,7 +490,7 @@ export default function QuizPage({ params }: Props) {
                   onClick={handleSubmit}
                   disabled={saving}
                   style={{
-                    padding: '10px 22px', borderRadius: 10,
+                    padding: '10px 18px', borderRadius: 10,
                     background: saving ? 'rgba(34,197,94,0.4)' : 'linear-gradient(135deg,#22c55e,#16a34a)',
                     border: 'none', color: '#fff',
                     cursor: saving ? 'not-allowed' : 'pointer',
@@ -506,13 +501,13 @@ export default function QuizPage({ params }: Props) {
                     flexShrink: 0,
                   }}
                 >
-                  {saving ? 'Submitting…' : '✓ Submit Quiz'}
+                  {saving ? 'Submitting…' : '✓ Submit'}
                 </button>
               )}
             </div>
 
             {/* Answered count */}
-            <p style={{ textAlign: 'center', color: '#334155', fontSize: '0.72rem', marginTop: '1.25rem' }}>
+            <p style={{ textAlign: 'center', color: '#334155', fontSize: '0.72rem', marginTop: '1rem' }}>
               {answered} of {questions.length} answered
             </p>
           </>
@@ -529,15 +524,7 @@ export default function QuizPage({ params }: Props) {
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /*
-          Mobile nav fix: on screens narrower than 540px the three-column
-          layout (Previous | dots | Next) collapses the dot container to
-          ~8px, making it invisible.
-
-          Fix: wrap dots onto their own full-width row above the buttons.
-          order: -1 places dots before Previous in the DOM flow.
-          No colors, fonts, or visual styles are changed.
-        */
+        /* On narrow screens, wrap dots above Prev/Next so they don't get squashed */
         @media (max-width: 540px) {
           .quiz-nav {
             flex-wrap: wrap;
