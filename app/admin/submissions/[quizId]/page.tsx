@@ -41,13 +41,12 @@ function TotalBadge({ score }: { score: number }) {
 }
 
 function Btn({
-  onClick, disabled = false, variant = 'ghost', children, danger = false
+  onClick, disabled = false, variant = 'ghost', children
 }: {
   onClick: () => void
   disabled?: boolean
   variant?: 'ghost' | 'primary' | 'danger'
   children: React.ReactNode
-  danger?: boolean
 }) {
   const styles: Record<string, React.CSSProperties> = {
     primary: {
@@ -78,6 +77,7 @@ function Btn({
         opacity: disabled ? 0.5 : 1,
         transition: 'all 0.15s',
         whiteSpace: 'nowrap',
+        minHeight: 36,
         ...styles[variant],
       }}
     >
@@ -106,18 +106,18 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
   const load = async () => {
     setLoading(true)
     const { data: quizData } = await supabase
-  .from('quizzes')
-  .select('id')
-  .eq('activity_id', params.quizId)
-  .single()
+      .from('quizzes')
+      .select('id')
+      .eq('activity_id', params.quizId)
+      .single()
 
-const quizId = quizData?.id
+    const quizId = quizData?.id
 
-const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
-  supabase.from('activities').select('id, title').eq('id', params.quizId).single(),
-  supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
-  supabase.from('questions').select('*').eq('quiz_id', quizId).order('order_index'),
-])
+    const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
+      supabase.from('activities').select('id, title').eq('id', params.quizId).single(),
+      supabase.from('submissions').select('*').eq('activity_id', params.quizId).order('final_score', { ascending: false }),
+      supabase.from('questions').select('*').eq('quiz_id', quizId).order('order_index'),
+    ])
     setActivity(act)
     setSubs(submissions ?? [])
     setQuestions(qs ?? [])
@@ -201,17 +201,17 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
   }
 
   // ── Stats ──────────────────────────────────────────────────────────────
-  const completed  = subs.filter(s => s.is_complete)
-  const avgScore   = completed.length
+  const completed = subs.filter(s => s.is_complete)
+  const avgScore  = completed.length
     ? Math.round(completed.reduce((a, s) => a + (s.final_score ?? 0), 0) / completed.length * 10) / 10
     : 0
-  const flagged    = subs.filter(s => s.cheat_flag).length
+  const flagged = subs.filter(s => s.cheat_flag).length
 
   // ── Loading ────────────────────────────────────────────────────────────
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {[1,2,3].map(i => (
-        <div key={i} style={{ height: 72, borderRadius: 12, background: 'rgba(255,255,255,0.03)', animation: 'pulse 1.5s infinite' }} />
+        <div key={i} style={{ height: 72, borderRadius: 12, background: 'rgba(255,255,255,0.03)' }} />
       ))}
     </div>
   )
@@ -255,12 +255,12 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
       )}
 
       {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginBottom: '1.5rem' }}>
         {[
-          { label: 'Total',     value: subs.length,       color: '#818cf8' },
-          { label: 'Completed', value: completed.length,   color: '#22c55e' },
-          { label: 'Avg Score', value: avgScore,           color: '#f59e0b' },
-          { label: 'Flagged',   value: flagged,            color: flagged > 0 ? '#f87171' : '#475569' },
+          { label: 'Total',     value: subs.length,     color: '#818cf8' },
+          { label: 'Completed', value: completed.length, color: '#22c55e' },
+          { label: 'Avg Score', value: avgScore,         color: '#f59e0b' },
+          { label: 'Flagged',   value: flagged,          color: flagged > 0 ? '#f87171' : '#475569' },
         ].map(s => (
           <div key={s.label} style={{
             background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.08)',
@@ -300,11 +300,10 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {subs.map((s, i) => {
-            const isOpen    = expanded === s.id
+            const isOpen     = expanded === s.id
             const rawAnswers: Record<string, string> =
               typeof s.answers === 'object' && !Array.isArray(s.answers)
                 ? s.answers : {}
-
             const isDeleting = deleting === s.id
 
             return (
@@ -319,18 +318,24 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                   transition: 'opacity 0.2s',
                 }}
               >
-                {/* ── Submission row ── */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '14px 16px', flexWrap: 'wrap',
+                {/* ── Submission row ──
+                    FIX: Replaced marginLeft:'auto' on actions with a separate
+                    full-width actions row via className="sub-actions".
+                    When the row wraps on mobile, the actions now appear
+                    flush-left below the identity info rather than
+                    floating into the middle of the screen.
+                ── */}
+                <div className="sub-row" style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '12px 16px', flexWrap: 'wrap',
                 }}>
                   {/* Rank */}
-                  <span style={{ color: '#334155', fontSize: '0.75rem', fontFamily: 'monospace', minWidth: 24 }}>
+                  <span style={{ color: '#334155', fontSize: '0.75rem', fontFamily: 'monospace', minWidth: 24, flexShrink: 0 }}>
                     #{i + 1}
                   </span>
 
                   {/* Avatar + name */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 150 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 140 }}>
                     <div style={{
                       width: 34, height: 34, borderRadius: '50%',
                       background: 'rgba(99,102,241,0.15)',
@@ -341,18 +346,18 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                     }}>
                       {(s.username ?? s.email)?.[0]?.toUpperCase() ?? '?'}
                     </div>
-                    <div>
-                      <div style={{ color: '#e2e8f0', fontSize: '0.875rem', fontWeight: 600 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: '#e2e8f0', fontSize: '0.875rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.username ?? 'No username'}
                       </div>
-                      <div style={{ color: '#475569', fontSize: '0.72rem', fontFamily: 'monospace' }}>
+                      <div style={{ color: '#475569', fontSize: '0.72rem', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.email}
                       </div>
                     </div>
                   </div>
 
                   {/* Score */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                     {editing?.id === s.id ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <input
@@ -367,8 +372,8 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                           }}
                           autoFocus
                         />
-                        <button onClick={saveScore} style={{ background: 'none', border: 'none', color: '#4ade80', cursor: 'pointer', fontSize: '1rem', padding: '4px' }}>✓</button>
-                        <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '1rem', padding: '4px' }}>✕</button>
+                        <button onClick={saveScore} style={{ background: 'none', border: 'none', color: '#4ade80', cursor: 'pointer', fontSize: '1rem', padding: '4px', minHeight: 32 }}>✓</button>
+                        <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '1rem', padding: '4px', minHeight: 32 }}>✕</button>
                       </div>
                     ) : (
                       <TotalBadge score={s.final_score ?? 0} />
@@ -381,7 +386,7 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                   </div>
 
                   {/* Time */}
-                  <span style={{ color: '#475569', fontSize: '0.78rem', fontFamily: 'monospace', minWidth: 60 }}>
+                  <span style={{ color: '#475569', fontSize: '0.78rem', fontFamily: 'monospace', flexShrink: 0 }}>
                     {s.time_taken_seconds ? formatDuration(s.time_taken_seconds) : '—'}
                   </span>
 
@@ -391,7 +396,7 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                     background: s.is_complete ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)',
                     color: s.is_complete ? '#4ade80' : '#fbbf24',
                     border: `1px solid ${s.is_complete ? 'rgba(34,197,94,0.2)' : 'rgba(245,158,11,0.2)'}`,
-                    textTransform: 'uppercase', letterSpacing: '0.05em',
+                    textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0,
                   }}>
                     {s.is_complete ? 'Done' : 'Partial'}
                   </span>
@@ -401,17 +406,17 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                     <span style={{
                       fontSize: '0.68rem', fontWeight: 700, padding: '3px 8px', borderRadius: 6,
                       background: 'rgba(239,68,68,0.1)', color: '#f87171',
-                      border: '1px solid rgba(239,68,68,0.2)',
+                      border: '1px solid rgba(239,68,68,0.2)', flexShrink: 0,
                     }}>
                       ⚠ {s.cheat_violations ?? 1} flag{(s.cheat_violations ?? 1) !== 1 ? 's' : ''}
                     </span>
                   )}
 
-                  {/* Actions */}
-                  <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+                  {/* Actions — className="sub-actions" allows CSS to push to new line on mobile */}
+                  <div className="sub-actions" style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
                     <button
                       onClick={() => setEditing({ id: s.id, score: String(s.final_score ?? 0) })}
-                      style={{ background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', fontSize: '0.8rem', padding: '4px 6px', borderRadius: 6 }}
+                      style={{ background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', fontSize: '0.8rem', padding: '4px 6px', borderRadius: 6, minHeight: 32 }}
                     >
                       Edit
                     </button>
@@ -423,6 +428,7 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                         color: isOpen ? '#818cf8' : '#94a3b8',
                         cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
                         padding: '5px 10px', borderRadius: 7, transition: 'all 0.15s',
+                        minHeight: 32,
                       }}
                     >
                       {isOpen ? 'Hide ▲' : 'Answers ▼'}
@@ -436,6 +442,7 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                         fontSize: '0.78rem', fontWeight: 600,
                         padding: '5px 10px', borderRadius: 7, transition: 'all 0.15s',
                         opacity: isDeleting ? 0.5 : 1,
+                        minHeight: 32,
                       }}
                     >
                       {isDeleting ? '…' : 'Delete'}
@@ -447,7 +454,6 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                 {isOpen && (
                   <div style={{ borderTop: '1px solid rgba(148,163,184,0.07)', padding: '16px' }}>
 
-                    {/* Question Blocks */}
                     <p style={{ color: '#475569', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 12 }}>
                       Answer Breakdown
                     </p>
@@ -472,14 +478,15 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
                                 padding: '12px 14px',
                               }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
-                                <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+                                <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, flex: 1, minWidth: 0 }}>
                                   Q{idx + 1} · {q.text}
                                 </span>
                                 <ScorePip score={score} max={maxPts} />
                               </div>
 
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                              {/* FIX: className="ans-grid" — switches to single column on narrow phones */}
+                              <div className="ans-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                                 <div>
                                   <span style={{ display: 'block', color: '#475569', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>User's Answer</span>
                                   <span style={{ color: userAns ? '#e2e8f0' : '#334155', fontSize: '0.82rem', fontStyle: userAns ? 'normal' : 'italic' }}>
@@ -520,6 +527,25 @@ const [{ data: act }, { data: submissions }, { data: qs }] = await Promise.all([
           })}
         </div>
       )}
+
+      {/* ── Responsive fixes ── */}
+      <style>{`
+        /* On phones, the answer grid switches from 2-col to 1-col */
+        @media (max-width: 480px) {
+          .ans-grid {
+            grid-template-columns: 1fr !important;
+          }
+          /* Actions row: break onto its own full-width line and remove auto-margin */
+          .sub-actions {
+            margin-left: 0 !important;
+            width: 100%;
+          }
+          /* Ensure sub-row wraps cleanly */
+          .sub-row {
+            row-gap: 8px;
+          }
+        }
+      `}</style>
     </div>
   )
 }
