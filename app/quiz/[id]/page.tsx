@@ -130,16 +130,49 @@ export default function QuizPage({ params }: Props) {
       } catch { /* safe — non-critical */ }
     }
 
-    const handleVisibilityChange = () => { if (document.hidden) logViolation('TAB_SWITCH') }
-    const handleBlur = () => { logViolation('WINDOW_BLUR') }
+    const handleVisibilityChange = () => {
+  if (document.hidden) logViolation('TAB_SWITCH')
+}
 
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('blur', handleBlur)
+const handleBlur = () => {
+  logViolation('WINDOW_BLUR')
+}
 
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('blur', handleBlur)
-    }
+// NEW
+const handleFocus = () => {
+  logViolation('WINDOW_FOCUS')
+}
+
+const handleCopy = () => {
+  logViolation('COPY')
+}
+
+const handlePaste = () => {
+  logViolation('PASTE')
+}
+
+const handleContextMenu = (e: MouseEvent) => {
+  e.preventDefault()
+  logViolation('RIGHT_CLICK')
+}
+
+document.addEventListener('visibilitychange', handleVisibilityChange)
+window.addEventListener('blur', handleBlur)
+window.addEventListener('focus', handleFocus)
+
+document.addEventListener('copy', handleCopy)
+document.addEventListener('paste', handlePaste)
+document.addEventListener('contextmenu', handleContextMenu)
+
+return () => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener('blur', handleBlur)
+  window.removeEventListener('focus', handleFocus)
+
+  document.removeEventListener('copy', handleCopy)
+  document.removeEventListener('paste', handlePaste)
+  document.removeEventListener('contextmenu', handleContextMenu)
+}
   }, [state])
   // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
