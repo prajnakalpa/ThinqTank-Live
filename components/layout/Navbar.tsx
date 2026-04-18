@@ -75,7 +75,7 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop nav links */}
-          <div className="hidden md:flex" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div className="hidden md:flex" style={{ alignItems: 'center', gap: 4 }}>
             {NAV_LINKS.map(({ href, label }) => {
               const active = path === href
               return (
