@@ -175,11 +175,11 @@ export default function QuizPage({ params }: Props) {
   }
 
   // ── Derived ────────────────────────────────────────────────────────────
-  const urgent      = timeLeft > 0 && timeLeft < 60
-  const answered    = Object.values(answers).filter(Boolean).length
-  const q           = questions[currentQ]
-  const mins        = Math.floor(timeLeft / 60)
-  const secs        = (timeLeft % 60).toString().padStart(2, '0')
+  const urgent   = timeLeft > 0 && timeLeft < 60
+  const answered = Object.values(answers).filter(Boolean).length
+  const q        = questions[currentQ]
+  const mins     = Math.floor(timeLeft / 60)
+  const secs     = (timeLeft % 60).toString().padStart(2, '0')
 
   // ── State screens ──────────────────────────────────────────────────────
 
@@ -295,6 +295,11 @@ export default function QuizPage({ params }: Props) {
 
   // ── Main quiz UI ───────────────────────────────────────────────────────
 
+  // True if the current question is MCQ
+  const qIsMcq = q?.type?.includes('mcq') ?? false
+  // Safely parse options array
+  const qOptions: string[] = Array.isArray(q?.options) ? q.options : []
+
   return (
     <div style={{ minHeight: '100vh', background: '#020617', color: '#f1f5f9' }}>
 
@@ -365,10 +370,11 @@ export default function QuizPage({ params }: Props) {
             <div style={{
               background: 'rgba(15,23,42,0.8)',
               border: '1px solid rgba(148,163,184,0.1)',
-              borderRadius: 16, padding: '1.25rem 1.25rem',
+              borderRadius: 16, padding: '1.25rem',
               marginBottom: '1.25rem',
               boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
             }}>
+              {/* Q badge + pts */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.875rem' }}>
                 <span style={{
                   background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)',
@@ -382,8 +388,35 @@ export default function QuizPage({ params }: Props) {
                     {q.weightage} pts
                   </span>
                 )}
+                {qIsMcq && (
+                  <span style={{
+                    background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)',
+                    color: '#a78bfa', borderRadius: 5, padding: '2px 7px',
+                    fontSize: '0.68rem', fontWeight: 700,
+                  }}>
+                    MCQ
+                  </span>
+                )}
               </div>
 
+              {/* ── Image (if present) — rendered ABOVE question text ── */}
+              {q.image_url && (
+                <img
+                  src={q.image_url}
+                  alt="Question image"
+                  style={{
+                    width: '100%',
+                    height: 'auto',
+                    borderRadius: 10,
+                    marginBottom: '1rem',
+                    display: 'block',
+                    maxHeight: 360,
+                    objectFit: 'contain',
+                  }}
+                />
+              )}
+
+              {/* Question text */}
               <p style={{
                 fontSize: '1rem', lineHeight: 1.7,
                 color: '#e2e8f0', fontWeight: 400,
@@ -392,33 +425,82 @@ export default function QuizPage({ params }: Props) {
                 {q.text}
               </p>
 
-              {/* Answer textarea */}
-              <textarea
-                value={answers[q.id] || ''}
-                onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-                placeholder="Type your answer here…"
-                rows={4}
-                style={{
-                  width: '100%', resize: 'vertical',
-                  background: 'rgba(2,6,23,0.7)',
-                  border: '1.5px solid rgba(148,163,184,0.1)',
-                  borderRadius: 12, padding: '12px 14px',
-                  color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
-                  outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
-                  fontFamily: 'inherit',
-                }}
-                onFocus={e => {
-                  e.target.style.borderColor = 'rgba(99,102,241,0.55)'
-                  e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)'
-                }}
-                onBlur={e => {
-                  e.target.style.borderColor = 'rgba(148,163,184,0.1)'
-                  e.target.style.boxShadow = 'none'
-                }}
-              />
+              {/* ── ANSWER INPUT — conditional on type ── */}
+              {qIsMcq ? (
+                // ── MCQ: selectable option buttons ──
+                // Answers stored as STRING index: '0', '1', '2', …
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {qOptions.map((opt: string, idx: number) => {
+                    const idxStr  = String(idx)
+                    const selected = answers[q.id] === idxStr
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => setAnswers(prev => ({ ...prev, [q.id]: idxStr }))}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 12,
+                          padding: '12px 14px', borderRadius: 10,
+                          background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)',
+                          border: selected
+                            ? '1.5px solid rgba(99,102,241,0.55)'
+                            : '1.5px solid rgba(148,163,184,0.1)',
+                          color: selected ? '#e2e8f0' : '#94a3b8',
+                          fontSize: '0.95rem', textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s',
+                          width: '100%',
+                        }}
+                      >
+                        {/* Option letter indicator */}
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+                          background: selected ? '#6366f1' : 'rgba(148,163,184,0.1)',
+                          color: selected ? '#fff' : '#64748b',
+                          fontSize: '0.75rem', fontWeight: 700,
+                          transition: 'all 0.15s',
+                        }}>
+                          {String.fromCharCode(65 + idx)}
+                        </span>
+                        {opt}
+                      </button>
+                    )
+                  })}
+                  {qOptions.length === 0 && (
+                    <p style={{ color: '#475569', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                      No options configured for this question.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                // ── Objective: text textarea (unchanged) ──
+                <textarea
+                  value={answers[q.id] || ''}
+                  onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+                  placeholder="Type your answer here…"
+                  rows={4}
+                  style={{
+                    width: '100%', resize: 'vertical',
+                    background: 'rgba(2,6,23,0.7)',
+                    border: '1.5px solid rgba(148,163,184,0.1)',
+                    borderRadius: 12, padding: '12px 14px',
+                    color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
+                    outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
+                    fontFamily: 'inherit',
+                  }}
+                  onFocus={e => {
+                    e.target.style.borderColor = 'rgba(99,102,241,0.55)'
+                    e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)'
+                  }}
+                  onBlur={e => {
+                    e.target.style.borderColor = 'rgba(148,163,184,0.1)'
+                    e.target.style.boxShadow = 'none'
+                  }}
+                />
+              )}
             </div>
 
-            {/* Navigation — responsive: dots wrap above buttons on narrow screens */}
+            {/* Navigation */}
             <div className="quiz-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
 
               <button
@@ -524,7 +606,6 @@ export default function QuizPage({ params }: Props) {
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* On narrow screens, wrap dots above Prev/Next so they don't get squashed */
         @media (max-width: 540px) {
           .quiz-nav {
             flex-wrap: wrap;
