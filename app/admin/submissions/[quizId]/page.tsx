@@ -5,10 +5,73 @@ import { createClient } from '@/lib/supabase/client'
 import { formatDuration } from '@/lib/quiz-state'
 import { evaluateAnswer } from '@/lib/evaluation'
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Answer helpers ─────────────────────────────────────────────────────────
+
+function isMcq(type?: string): boolean {
+  return type?.includes('mcq') ?? false
+}
+
+/**
+ * Decode a raw stored answer for display.
+ * MCQ answers are stored as string indices ("0", "1", …).
+ * Never shows a raw index to the admin.
+ */
+function decodeUserAnswer(q: any, rawAnswer: string): string {
+  if (rawAnswer === '') return 'No Answer'
+
+  if (isMcq(q.type)) {
+    if (!Array.isArray(q.options) || q.options.length === 0) return 'No Answer'
+    const idx = Number(rawAnswer)
+    if (isNaN(idx)) return 'No Answer'
+    return q.options[idx] ?? 'No Answer'
+  }
+
+  return rawAnswer
+}
+
+/**
+ * Decode the correct answer for display.
+ * For MCQ: show the option text, not the index.
+ */
+function decodeCorrectAnswer(q: any): string {
+  if (isMcq(q.type)) {
+    const idx = q.correct_option
+    if (idx == null || !Array.isArray(q.options)) return '—'
+    return q.options[idx] ?? '—'
+  }
+  return q.correct_answer || '—'
+}
+
+/**
+ * Determine whether the user's answer is correct.
+ * MCQ: exact string-index match.
+ * Objective: uses existing evaluateAnswer fuzzy logic.
+ */
+function checkCorrect(q: any, rawAnswer: string): boolean {
+  if (rawAnswer === '') return false
+  if (isMcq(q.type)) {
+    return rawAnswer === String(q.correct_option)
+  }
+  return evaluateAnswer(q, rawAnswer) > 0
+}
+
+/**
+ * Calculate the numeric score for a single question.
+ * MCQ: full marks or zero.
+ * Objective: existing evaluateAnswer.
+ */
+function calcScore(q: any, rawAnswer: string): number {
+  if (rawAnswer === '') return 0
+  if (isMcq(q.type)) {
+    return rawAnswer === String(q.correct_option) ? (q.weightage ?? 1) : 0
+  }
+  return evaluateAnswer(q, rawAnswer)
+}
+
+// ── UI helpers ─────────────────────────────────────────────────────────────
 
 function ScorePip({ score, max }: { score: number; max: number }) {
-  const pct = max > 0 ? score / max : 0
+  const pct   = max > 0 ? score / max : 0
   const color = pct === 1 ? '#22c55e' : pct >= 0.5 ? '#f59e0b' : '#ef4444'
   const bg    = pct === 1 ? 'rgba(34,197,94,0.12)' : pct >= 0.5 ? 'rgba(245,158,11,0.12)' : 'rgba(239,68,68,0.12)'
   return (
@@ -318,13 +381,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                   transition: 'opacity 0.2s',
                 }}
               >
-                {/* ── Submission row ──
-                    FIX: Replaced marginLeft:'auto' on actions with a separate
-                    full-width actions row via className="sub-actions".
-                    When the row wraps on mobile, the actions now appear
-                    flush-left below the identity info rather than
-                    floating into the middle of the screen.
-                ── */}
+                {/* ── Submission row ── */}
                 <div className="sub-row" style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '12px 16px', flexWrap: 'wrap',
@@ -412,7 +469,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                     </span>
                   )}
 
-                  {/* Actions — className="sub-actions" allows CSS to push to new line on mobile */}
+                  {/* Actions */}
                   <div className="sub-actions" style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
                     <button
                       onClick={() => setEditing({ id: s.id, score: String(s.final_score ?? 0) })}
@@ -450,7 +507,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                   </div>
                 </div>
 
-                {/* ── Expanded: Answers + Violations ── */}
+                {/* ── Expanded: Answer Breakdown ── */}
                 {isOpen && (
                   <div style={{ borderTop: '1px solid rgba(148,163,184,0.07)', padding: '16px' }}>
 
@@ -463,9 +520,22 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                         <p style={{ color: '#334155', fontSize: '0.8rem' }}>No questions found for this quiz.</p>
                       ) : (
                         questions.map((q, idx) => {
-                          const userAns = rawAnswers[q.id] ?? ''
-                          const score   = evaluateAnswer(q, userAns)
-                          const maxPts  = q.weightage ?? 1
+                          const rawAnswer    = rawAnswers[q.id] ?? ''
+                          const score        = calcScore(q, rawAnswer)
+                          const maxPts       = q.weightage ?? 1
+                          const correct      = checkCorrect(q, rawAnswer)
+                          const qMcq         = isMcq(q.type)
+
+                          // Decoded text values — never shows raw index to admin
+                          const userDisplay    = decodeUserAnswer(q, rawAnswer)
+                          const correctDisplay = decodeCorrectAnswer(q)
+
+                          // Left border colour: green if full marks, amber if partial, grey if zero
+                          const borderColor = score >= maxPts
+                            ? '#22c55e'
+                            : score > 0
+                              ? '#f59e0b'
+                              : '#374151'
 
                           return (
                             <div
@@ -473,31 +543,142 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                               style={{
                                 background: 'rgba(255,255,255,0.02)',
                                 border: '1px solid rgba(148,163,184,0.06)',
-                                borderLeft: `3px solid ${score >= maxPts ? '#22c55e' : score > 0 ? '#f59e0b' : '#374151'}`,
+                                borderLeft: `3px solid ${borderColor}`,
                                 borderRadius: '0 10px 10px 0',
                                 padding: '12px 14px',
                               }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-                                <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, flex: 1, minWidth: 0 }}>
-                                  Q{idx + 1} · {q.text}
-                                </span>
+                              {/* Question header row */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  {/* Question number + type badge */}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                                    <span style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700 }}>
+                                      Q{idx + 1}
+                                    </span>
+                                    {qMcq && (
+                                      <span style={{
+                                        background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)',
+                                        color: '#a78bfa', borderRadius: 4, padding: '1px 6px',
+                                        fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                                      }}>
+                                        MCQ
+                                      </span>
+                                    )}
+                                  </div>
+                                  {/* Question image (if present) */}
+                                  {q.image_url && (
+                                    <img
+                                      src={q.image_url}
+                                      alt="Question image"
+                                      style={{ width: '100%', height: 'auto', maxHeight: 160, objectFit: 'contain', borderRadius: 6, marginBottom: 6 }}
+                                    />
+                                  )}
+                                  <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                                    {q.text}
+                                  </span>
+                                </div>
                                 <ScorePip score={score} max={maxPts} />
                               </div>
 
-                              {/* FIX: className="ans-grid" — switches to single column on narrow phones */}
+                              {/* Answer comparison — stacks to 1 col on mobile via .ans-grid */}
                               <div className="ans-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                                <div>
-                                  <span style={{ display: 'block', color: '#475569', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>User's Answer</span>
-                                  <span style={{ color: userAns ? '#e2e8f0' : '#334155', fontSize: '0.82rem', fontStyle: userAns ? 'normal' : 'italic' }}>
-                                    {userAns || '(no answer)'}
+
+                                {/* User's answer */}
+                                <div style={{
+                                  background: 'rgba(255,255,255,0.02)',
+                                  border: '1px solid rgba(148,163,184,0.06)',
+                                  borderRadius: 8, padding: '8px 10px',
+                                }}>
+                                  <span style={{ display: 'block', color: '#475569', fontSize: '0.63rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                                    User's Answer
+                                  </span>
+                                  {rawAnswer === '' ? (
+                                    <span style={{ color: '#374151', fontSize: '0.82rem', fontStyle: 'italic' }}>
+                                      No Answer
+                                    </span>
+                                  ) : (
+                                    <span className={correct ? 'text-green-600' : 'text-red-600'} style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                                      {correct ? '✓ ' : '✗ '}{userDisplay}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Correct answer */}
+                                <div style={{
+                                  background: 'rgba(34,197,94,0.04)',
+                                  border: '1px solid rgba(34,197,94,0.1)',
+                                  borderRadius: 8, padding: '8px 10px',
+                                }}>
+                                  <span style={{ display: 'block', color: '#475569', fontSize: '0.63rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                                    Correct Answer
+                                  </span>
+                                  <span style={{ color: '#4ade80', fontSize: '0.82rem', fontWeight: 600 }}>
+                                    {correctDisplay}
                                   </span>
                                 </div>
-                                <div>
-                                  <span style={{ display: 'block', color: '#475569', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Expected</span>
-                                  <span style={{ color: '#4ade80', fontSize: '0.82rem' }}>{q.correct_answer}</span>
-                                </div>
+
                               </div>
+
+                              {/* MCQ: show all options for context */}
+                              {qMcq && Array.isArray(q.options) && q.options.length > 0 && (
+                                <div style={{ marginTop: 8 }}>
+                                  <span style={{ display: 'block', color: '#334155', fontSize: '0.63rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+                                    All Options
+                                  </span>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {q.options.map((opt: string, optIdx: number) => {
+                                      const isCorrectOpt  = optIdx === q.correct_option
+                                      const isUserChoice  = rawAnswer === String(optIdx)
+                                      return (
+                                        <div key={optIdx} style={{
+                                          display: 'flex', alignItems: 'center', gap: 8,
+                                          padding: '5px 8px', borderRadius: 6,
+                                          background: isCorrectOpt
+                                            ? 'rgba(34,197,94,0.07)'
+                                            : isUserChoice
+                                              ? 'rgba(239,68,68,0.06)'
+                                              : 'transparent',
+                                          border: isCorrectOpt
+                                            ? '1px solid rgba(34,197,94,0.15)'
+                                            : isUserChoice
+                                              ? '1px solid rgba(239,68,68,0.12)'
+                                              : '1px solid transparent',
+                                        }}>
+                                          {/* Letter label */}
+                                          <span style={{
+                                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                            width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                                            background: isCorrectOpt
+                                              ? 'rgba(34,197,94,0.15)'
+                                              : 'rgba(148,163,184,0.08)',
+                                            color: isCorrectOpt ? '#4ade80' : '#475569',
+                                            fontSize: '0.65rem', fontWeight: 700,
+                                          }}>
+                                            {String.fromCharCode(65 + optIdx)}
+                                          </span>
+                                          <span style={{ fontSize: '0.8rem', flex: 1 }}>
+                                            <span className={
+                                              isCorrectOpt ? 'text-green-600'
+                                              : isUserChoice ? 'text-red-600'
+                                              : ''
+                                            } style={{ color: isCorrectOpt ? undefined : isUserChoice ? undefined : '#64748b' }}>
+                                              {opt}
+                                            </span>
+                                          </span>
+                                          {isCorrectOpt && (
+                                            <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>✓</span>
+                                          )}
+                                          {isUserChoice && !isCorrectOpt && (
+                                            <span style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700 }}>✗</span>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
                             </div>
                           )
                         })
@@ -530,17 +711,14 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
 
       {/* ── Responsive fixes ── */}
       <style>{`
-        /* On phones, the answer grid switches from 2-col to 1-col */
         @media (max-width: 480px) {
           .ans-grid {
             grid-template-columns: 1fr !important;
           }
-          /* Actions row: break onto its own full-width line and remove auto-margin */
           .sub-actions {
             margin-left: 0 !important;
             width: 100%;
           }
-          /* Ensure sub-row wraps cleanly */
           .sub-row {
             row-gap: 8px;
           }
