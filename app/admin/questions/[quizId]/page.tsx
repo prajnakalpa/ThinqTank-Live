@@ -26,7 +26,6 @@ const blank = (): Q => ({
   order_index: 0, type: 'objective_text',
 })
 
-// ── Reusable field label ──────────────────────────────────────────────────
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
     <label style={{
@@ -39,7 +38,6 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   )
 }
 
-// ── Shared input style ────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
   width: '100%', background: 'rgba(15,23,42,0.8)',
   border: '1px solid rgba(148,163,184,0.12)',
@@ -48,7 +46,6 @@ const inputStyle: React.CSSProperties = {
   outline: 'none', transition: 'border-color 0.15s',
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────
 export default function QuestionsPage({ params }: { params: { quizId: string } }) {
   const [questions,    setQuestions]    = useState<Q[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -56,12 +53,10 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
   const [saving,       setSaving]       = useState(false)
   const [title,        setTitle]        = useState('')
 
-  // Filters (UNCHANGED logic)
   const [search,       setSearch]       = useState('')
   const [typeFilter,   setTypeFilter]   = useState('all')
   const [strictFilter, setStrictFilter] = useState('all')
 
-  // Excel (UNCHANGED logic)
   const [xlsxPreview,   setXlsxPreview]   = useState<Q[]>([])
   const [xlsxParsing,   setXlsxParsing]   = useState(false)
   const [xlsxUploading, setXlsxUploading] = useState(false)
@@ -69,8 +64,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
   const xlsxInputRef = useRef<HTMLInputElement>(null)
 
   const supabase = createClient()
-
-  // ── Data ──────────────────────────────────────────────────────────────
 
   const getRealQuizId = async () => {
     const { data } = await supabase
@@ -89,8 +82,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
   }
 
   useEffect(() => { load() }, [params.quizId])
-
-  // ── CRUD (UNCHANGED logic) ────────────────────────────────────────────
 
   const save = async () => {
     if (!editing?.text) return
@@ -120,8 +111,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     setQuestions(p => p.filter(q => q.id !== id))
   }
 
-  // ── Filter (UNCHANGED logic) ─────────────────────────────────────────
-
   const filtered = questions.filter(q => {
     const s = search.toLowerCase()
     const matchSearch = q.text.toLowerCase().includes(s) || q.correct_answer.toLowerCase().includes(s)
@@ -129,8 +118,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     const matchStrict = strictFilter === 'all' || q.strictness_level === strictFilter
     return matchSearch && matchType && matchStrict
   })
-
-  // ── Excel handlers (UNCHANGED logic) ─────────────────────────────────
 
   const handleXlsxFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
@@ -171,8 +158,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
 
   const cancelXlsxUpload = () => { setXlsxPreview([]); setXlsxError('') }
 
-  // ── Loading ────────────────────────────────────────────────────────────
-
   if (loading) return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {[1,2,3].map(i => (
@@ -180,8 +165,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
       ))}
     </div>
   )
-
-  // ── Render ─────────────────────────────────────────────────────────────
 
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
@@ -327,29 +310,20 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
       )}
 
       {/* ── EDIT / ADD MODAL ──
-          FIX 1: zIndex raised from 60 → 110
-            The admin sidebar is zIndex 95 and mobile topbar is zIndex 100.
-            With zIndex 60 the sidebar/topbar rendered on TOP of the modal on
-            mobile, making the form completely unusable on phones.
-
-          FIX 2: Scroll behaviour
-            The previous `display:'flex', alignItems:'center'` outer combined
-            with `overflowY:'auto'` doesn't scroll — flex containers with
-            alignItems:center don't allow their items to overflow vertically.
-            Fix: outer uses overflowY:'auto' with display:'block' + padding,
-            inner uses margin:'0 auto' to stay horizontally centered.
-            The form is now fully reachable on small screens.
+          zIndex: 110 — above sidebar (95) and mobile topbar (100)
+          display: 'block' + overflowY: 'auto' — allows scrolling on small screens
+          (flex + alignItems:center prevents overflow-y from working)
       ── */}
       {editing && (
         <div
           onClick={e => { if (e.target === e.currentTarget) setEditing(null) }}
           style={{
             position: 'fixed', inset: 0,
-            zIndex: 110,                        // FIX 1: above sidebar (95) and topbar (100)
+            zIndex: 110,
             background: 'rgba(2,6,23,0.85)',
             backdropFilter: 'blur(8px)',
-            overflowY: 'auto',                  // FIX 2: scrollable container
-            display: 'block',                   // FIX 2: block (not flex) so overflow works
+            overflowY: 'auto',
+            display: 'block',
             padding: '1rem',
           }}
         >
@@ -358,7 +332,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
             border: '1px solid rgba(148,163,184,0.1)',
             borderRadius: 18, padding: '1.75rem',
             width: '100%', maxWidth: 560,
-            margin: '0 auto',                   // FIX 2: horizontal centering in block container
+            margin: '0 auto',
             boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
           }}>
             {/* Modal header */}
@@ -368,7 +342,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
               </h2>
               <button
                 onClick={() => setEditing(null)}
-                style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1, padding: '4px 6px' }}
+                style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1, padding: '4px 6px', minHeight: 32, minWidth: 32 }}
               >
                 ×
               </button>
@@ -388,8 +362,8 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
                 />
               </div>
 
-              {/* Type + Strictness */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {/* Type + Strictness — stack on narrow modal */}
+              <div className="modal-grid-2">
                 <div>
                   <FieldLabel>Type</FieldLabel>
                   <select
@@ -424,8 +398,8 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
                 />
               </div>
 
-              {/* Keywords + Synonyms */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {/* Keywords + Synonyms — stack on narrow modal */}
+              <div className="modal-grid-2">
                 <div>
                   <FieldLabel>Accepted Keywords</FieldLabel>
                   <input
@@ -462,7 +436,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
             </div>
 
             {/* Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1.5rem', flexWrap: 'wrap' }}>
               <button
                 onClick={() => setEditing(null)}
                 style={{
@@ -544,7 +518,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
             </p>
 
             <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid rgba(148,163,184,0.08)' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', minWidth: 480 }}>
                 <thead>
                   <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                     {['#', 'Question', 'Answer', 'Keywords', 'Strictness', 'Type', 'Pts'].map(h => (
@@ -556,8 +530,8 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
                   {xlsxPreview.slice(0, 8).map((q, i) => (
                     <tr key={i} style={{ borderTop: '1px solid rgba(148,163,184,0.06)' }}>
                       <td style={{ padding: '9px 12px', color: '#475569' }}>{i + 1}</td>
-                      <td style={{ padding: '9px 12px', color: '#e2e8f0', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={q.text}>{q.text}</td>
-                      <td style={{ padding: '9px 12px', color: '#4ade80', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.correct_answer}</td>
+                      <td style={{ padding: '9px 12px', color: '#e2e8f0', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={q.text}>{q.text}</td>
+                      <td style={{ padding: '9px 12px', color: '#4ade80', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.correct_answer}</td>
                       <td style={{ padding: '9px 12px', color: '#64748b', fontSize: '0.72rem' }}>{q.accepted_keywords.join(', ') || '—'}</td>
                       <td style={{ padding: '9px 12px', color: '#64748b' }}>{q.strictness_level}</td>
                       <td style={{ padding: '9px 12px', color: '#64748b', fontSize: '0.72rem' }}>{q.type}</td>
@@ -571,7 +545,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
               </table>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+            <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
               <button
                 onClick={confirmXlsxUpload}
                 disabled={xlsxUploading}
@@ -601,6 +575,19 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
         )}
       </div>
 
+      {/* ── Responsive: stack modal 2-col grids on narrow screens ── */}
+      <style>{`
+        .modal-grid-2 {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        @media (max-width: 420px) {
+          .modal-grid-2 {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
     </div>
   )
 }
