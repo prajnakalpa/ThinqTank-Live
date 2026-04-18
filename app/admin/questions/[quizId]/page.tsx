@@ -1,590 +1,620 @@
-// app/admin/questions/[quizId]/page.tsx
+// app/quiz/[id]/page.tsx
 'use client'
-import { useState, useEffect, useRef } from 'react'
+export const dynamic = 'force-dynamic'
+
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import * as XLSX from 'xlsx'
+import { getSecondsRemaining, formatTime } from '@/lib/quiz-state'
 
-interface Q {
-  id?: string
-  text: string
-  correct_answer: string
-  accepted_keywords: string[]
-  synonyms: string[]
-  weightage: number
-  strictness_level: string
-  order_index: number
-  type?: string
-}
+interface Props { params: { id: string } }
 
-const validTypes      = ['objective_text', 'objective_media', 'mcq_text', 'mcq_media']
-const validStrictness = ['strict', 'medium', 'loose']
+export default function QuizPage({ params }: Props) {
+  const [state,         setState]         = useState<'loading'|'username'|'quiz'|'submitted'|'closed'|'error'>('loading')
+  const [activity,      setActivity]      = useState<any>(null)
+  const [quiz,          setQuiz]          = useState<any>(null)
+  const [questions,     setQuestions]     = useState<any[]>([])
+  const [answers,       setAnswers]       = useState<Record<string, string>>({})
+  const [submission,    setSubmission]    = useState<any>(null)
+  const [timeLeft,      setTimeLeft]      = useState(0)
+  const [saving,        setSaving]        = useState(false)
+  const [currentQ,      setCurrentQ]      = useState(0)
+  const [newUsername,   setNewUsername]   = useState('')
+  const [usernameError, setUsernameError] = useState('')
 
-const blank = (): Q => ({
-  text: '', correct_answer: '',
-  accepted_keywords: [], synonyms: [],
-  weightage: 1, strictness_level: 'medium',
-  order_index: 0, type: 'objective_text',
-})
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <label style={{
-      display: 'block', color: '#64748b', fontSize: '0.7rem',
-      fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em',
-      marginBottom: 6,
-    }}>
-      {children}
-    </label>
-  )
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%', background: 'rgba(15,23,42,0.8)',
-  border: '1px solid rgba(148,163,184,0.12)',
-  borderRadius: 8, padding: '8px 11px',
-  color: '#f1f5f9', fontSize: '0.875rem',
-  outline: 'none', transition: 'border-color 0.15s',
-}
-
-export default function QuestionsPage({ params }: { params: { quizId: string } }) {
-  const [questions,    setQuestions]    = useState<Q[]>([])
-  const [loading,      setLoading]      = useState(true)
-  const [editing,      setEditing]      = useState<Q | null>(null)
-  const [saving,       setSaving]       = useState(false)
-  const [title,        setTitle]        = useState('')
-
-  const [search,       setSearch]       = useState('')
-  const [typeFilter,   setTypeFilter]   = useState('all')
-  const [strictFilter, setStrictFilter] = useState('all')
-
-  const [xlsxPreview,   setXlsxPreview]   = useState<Q[]>([])
-  const [xlsxParsing,   setXlsxParsing]   = useState(false)
-  const [xlsxUploading, setXlsxUploading] = useState(false)
-  const [xlsxError,     setXlsxError]     = useState('')
-  const xlsxInputRef = useRef<HTMLInputElement>(null)
-
+  const router   = useRouter()
   const supabase = createClient()
 
-  const getRealQuizId = async () => {
-    const { data } = await supabase
-      .from('quizzes').select('id, activities(title)')
-      .eq('activity_id', params.quizId).single()
-    if (data?.activities) setTitle((data.activities as any).title)
-    return data?.id ?? params.quizId
+  // ── Refs (anti-stale-closure + Silent Sentinel scope) ──────────────────
+  const timerRef       = useRef<NodeJS.Timeout>()
+  const answersRef     = useRef<Record<string, string>>({})
+  const submissionRef  = useRef<any>(null)
+  const quizRef        = useRef<any>(null)
+  const submittingRef  = useRef(false)
+
+  useEffect(() => { answersRef.current   = answers    }, [answers])
+  useEffect(() => { submissionRef.current = submission }, [submission])
+  useEffect(() => { quizRef.current      = quiz       }, [quiz])
+
+  // ── Auto-submit ────────────────────────────────────────────────────────
+  const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
+    if (submittingRef.current) return
+    submittingRef.current = true
+    await supabase.from('submissions').update({
+      answers: currentAnswers, is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: duration,
+    }).eq('id', subId)
+    await fetch('/api/quiz/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: subId }),
+    })
+    setState('submitted')
   }
 
-  const load = async () => {
-    const qid = await getRealQuizId()
-    const { data } = await supabase
-      .from('questions').select('*').eq('quiz_id', qid).order('order_index')
-    setQuestions(data ?? [])
-    setLoading(false)
-  }
+  // ── Load quiz ──────────────────────────────────────────────────────────
+  const loadQuiz = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { router.push(`/login?redirect=/quiz/${params.id}`); return }
 
-  useEffect(() => { load() }, [params.quizId])
+    const { data: act } = await supabase
+      .from('activities').select('*, quizzes(*, questions(*))')
+      .eq('id', params.id).single()
 
-  const save = async () => {
-    if (!editing?.text) return
-    setSaving(true)
-    const qid = await getRealQuizId()
-    const { id: editingId, ...fields } = editing
-    const payload = { ...fields, quiz_id: qid }
+    if (!act || act.status === 'closed') { setState('closed'); return }
 
-    if (editingId) {
-      const { data } = await supabase
-        .from('questions').update(payload).eq('id', editingId).select().single()
-      setQuestions(p => p.map(q => q.id === editingId ? data as Q : q))
+    setActivity(act)
+    const q  = act.quizzes; setQuiz(q)
+    const qs = (q?.questions ?? []).sort((a: any, b: any) => a.order_index - b.order_index)
+    setQuestions(qs)
+
+    const { data: existingSub } = await supabase
+      .from('submissions').select('*')
+      .eq('activity_id', params.id).eq('user_id', user.id).single()
+
+    if (existingSub?.is_complete) { setState('submitted'); setSubmission(existingSub); return }
+
+    const { data: profile } = await supabase.from('users').select('username').eq('id', user.id).single()
+    if (!profile?.username) { setState('username'); return }
+
+    if (existingSub) {
+      setSubmission(existingSub)
+      setAnswers(existingSub.answers ?? {})
+      const remaining = getSecondsRemaining(existingSub.start_time, q.duration_minutes * 60)
+      if (remaining <= 0) { doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60); return }
+      setTimeLeft(remaining)
     } else {
-      const { data } = await supabase
-        .from('questions')
-        .insert({ ...payload, order_index: questions.length })
-        .select().single()
-      setQuestions(p => [...p, data as Q])
+      const { data: newSub } = await supabase.from('submissions').insert({
+        activity_id: params.id, user_id: user.id, email: user.email,
+        username: profile.username, start_time: new Date().toISOString()
+      }).select().single()
+      setSubmission(newSub)
+      setTimeLeft(q.duration_minutes * 60)
     }
-    setEditing(null)
-    setSaving(false)
+    setState('quiz')
+  }, [params.id])
+
+  useEffect(() => { loadQuiz() }, [loadQuiz])
+
+  // ── Timer ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (state !== 'quiz' || !submission) return
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timerRef.current)
+          doAutoSubmit(submissionRef.current.id, answersRef.current, quizRef.current.duration_minutes * 60)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(timerRef.current)
+  }, [state, submission])
+
+  // ── ✅ SILENT SENTINEL — DO NOT MOVE OR REFACTOR ─────────────────────
+  // Anti-cheat event listeners. submissionRef + answersRef must remain in parent scope.
+  useEffect(() => {
+    if (state !== 'quiz' || !submissionRef.current?.id) return
+
+    const logViolation = async (type: string) => {
+      try {
+        await fetch('/api/quiz/log-event', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            submissionId: submissionRef.current.id,
+            type,
+            timestamp: new Date().toISOString()
+          })
+        })
+      } catch { /* safe — non-critical */ }
+    }
+
+    const handleVisibilityChange = () => { if (document.hidden) logViolation('TAB_SWITCH') }
+    const handleBlur = () => { logViolation('WINDOW_BLUR') }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleBlur)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleBlur)
+    }
+  }, [state])
+  // ── END SILENT SENTINEL ───────────────────────────────────────────────
+
+  // ── Submit ─────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    if (submittingRef.current) return
+    submittingRef.current = true
+    setSaving(true)
+    const timeTaken = Math.floor((Date.now() - new Date(submission.start_time).getTime()) / 1000)
+    await supabase.from('submissions').update({
+      answers: answersRef.current, is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: timeTaken,
+    }).eq('id', submission.id)
+    await fetch('/api/quiz/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissionId: submission.id }),
+    })
+    setState('submitted')
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this question?')) return
-    await supabase.from('questions').delete().eq('id', id)
-    setQuestions(p => p.filter(q => q.id !== id))
+  // ── Username ───────────────────────────────────────────────────────────
+  const handleSetUsername = async () => {
+    const trimmed = newUsername.trim()
+    if (trimmed.length < 3) { setUsernameError('At least 3 characters.'); return }
+    setUsernameError('')
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const { error } = await supabase.from('users')
+      .update({ username: trimmed, username_locked: true }).eq('id', user.id)
+    if (error?.code === '23505') { setUsernameError('Username taken. Try another.'); return }
+    loadQuiz()
   }
 
-  const filtered = questions.filter(q => {
-    const s = search.toLowerCase()
-    const matchSearch = q.text.toLowerCase().includes(s) || q.correct_answer.toLowerCase().includes(s)
-    const matchType   = typeFilter   === 'all' || q.type             === typeFilter
-    const matchStrict = strictFilter === 'all' || q.strictness_level === strictFilter
-    return matchSearch && matchType && matchStrict
-  })
+  // ── Derived ────────────────────────────────────────────────────────────
+  const urgent   = timeLeft > 0 && timeLeft < 60
+  const answered = Object.values(answers).filter(Boolean).length
+  const q        = questions[currentQ]
+  const mins     = Math.floor(timeLeft / 60)
+  const secs     = (timeLeft % 60).toString().padStart(2, '0')
 
-  const handleXlsxFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return
-    setXlsxError(''); setXlsxParsing(true)
-    try {
-      const buf = await file.arrayBuffer()
-      const wb  = XLSX.read(buf)
-      const ws  = wb.Sheets[wb.SheetNames[0]]
-      const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' })
-      const parsed: Q[] = rows
-        .map((r, i) => ({
-          text:               String(r.Question ?? '').trim(),
-          correct_answer:     String(r.Answer   ?? '').trim(),
-          accepted_keywords:  r.Keywords ? String(r.Keywords).split(',').map((s: string) => s.trim()).filter(Boolean) : [],
-          synonyms:           r.Synonyms  ? String(r.Synonyms).split(',').map((s: string) => s.trim()).filter(Boolean) : [],
-          type:               validTypes.includes(String(r.Type))       ? String(r.Type)       : 'objective_text',
-          strictness_level:   validStrictness.includes(String(r.Strictness)) ? String(r.Strictness) : 'medium',
-          weightage:          Number(r.Weightage) > 0 ? Number(r.Weightage) : 1,
-          order_index:        questions.length + i,
-        }))
-        .filter(q => q.text && q.correct_answer)
-      if (parsed.length === 0) setXlsxError('No valid rows found. Required columns: Question, Answer')
-      else setXlsxPreview(parsed)
-    } catch { setXlsxError('Failed to parse file. Use .xlsx or .csv') }
-    setXlsxParsing(false)
-    if (xlsxInputRef.current) xlsxInputRef.current.value = ''
-  }
+  // ── State screens ──────────────────────────────────────────────────────
 
-  const confirmXlsxUpload = async () => {
-    if (!xlsxPreview.length) return
-    setXlsxUploading(true)
-    const qid = await getRealQuizId()
-    const { data } = await supabase
-      .from('questions').insert(xlsxPreview.map(q => ({ ...q, quiz_id: qid }))).select()
-    if (data) { setQuestions(p => [...p, ...(data as Q[])]); setXlsxPreview([]) }
-    setXlsxUploading(false)
-  }
-
-  const cancelXlsxUpload = () => { setXlsxPreview([]); setXlsxError('') }
-
-  if (loading) return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {[1,2,3].map(i => (
-        <div key={i} style={{ height: 68, borderRadius: 12, background: 'rgba(255,255,255,0.03)' }} />
-      ))}
+  if (state === 'loading') return (
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: '50%', margin: '0 auto 16px',
+          border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        <p style={{ color: '#475569', fontSize: '0.875rem' }}>Loading quiz…</p>
+      </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 
-  return (
-    <div style={{ maxWidth: 860, margin: '0 auto' }}>
-
-      {/* Page header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <p style={{ color: '#6366f1', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
-            Admin · Questions
-          </p>
-          <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#f1f5f9' }}>
-            {title || '…'}
-          </h1>
-          <p style={{ color: '#475569', fontSize: '0.8rem', marginTop: 2 }}>
-            {questions.length} question{questions.length !== 1 ? 's' : ''}
-          </p>
-        </div>
+  if (state === 'submitted') return (
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{
+        maxWidth: 440, width: '100%', textAlign: 'center',
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
+        borderRadius: 20, padding: '2.5rem',
+      }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#f1f5f9', marginBottom: 8 }}>
+          Quiz Submitted!
+        </h1>
+        <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>Your responses have been recorded. Good luck!</p>
         <button
-          onClick={() => setEditing(blank())}
+          onClick={() => router.push('/')}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7,
-            padding: '9px 18px', borderRadius: 9,
+            padding: '10px 28px', borderRadius: 10,
             background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-            border: 'none', color: '#fff',
-            fontWeight: 700, fontSize: '0.875rem', cursor: 'pointer',
-            boxShadow: '0 3px 14px rgba(99,102,241,0.3)',
+            border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer',
+          }}
+        >
+          Back to Home
+        </button>
+      </div>
+    </div>
+  )
+
+  if (state === 'closed') return (
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{ maxWidth: 440, width: '100%', textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>🔒</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.4rem', color: '#f1f5f9', marginBottom: 8 }}>Quiz Closed</h1>
+        <p style={{ color: '#475569', marginBottom: '1.5rem' }}>This quiz is no longer accepting submissions.</p>
+        <button onClick={() => router.push('/live')} style={{ padding: '10px 24px', borderRadius: 9, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>Back to Live</button>
+      </div>
+    </div>
+  )
+
+  if (state === 'error') return (
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{ maxWidth: 440, width: '100%', textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>❌</div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.4rem', color: '#f1f5f9', marginBottom: 8 }}>Quiz Not Found</h1>
+        <button onClick={() => router.push('/live')} style={{ padding: '10px 24px', borderRadius: 9, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>Back to Live</button>
+      </div>
+    </div>
+  )
+
+  if (state === 'username') return (
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+      <div style={{
+        maxWidth: 440, width: '100%',
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
+        borderRadius: 20, padding: '2rem',
+      }}>
+        <div style={{ height: 2, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', borderRadius: 99, marginBottom: '1.5rem' }} />
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.3rem', color: '#f1f5f9', marginBottom: 6 }}>
+          Choose your username
+        </h1>
+        <p style={{ color: '#64748b', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+          Displayed on the leaderboard. <strong style={{ color: '#e2e8f0' }}>Cannot be changed later.</strong>
+        </p>
+        <input
+          placeholder="e.g. coolplayer42"
+          value={newUsername}
+          onChange={e => setNewUsername(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleSetUsername()}
+          maxLength={20}
+          autoFocus
+          style={{
+            width: '100%', background: 'rgba(15,23,42,0.8)',
+            border: '1px solid rgba(148,163,184,0.12)', borderRadius: 10,
+            padding: '11px 14px', color: '#f1f5f9', fontSize: '0.95rem',
+            outline: 'none', marginBottom: 10,
+          }}
+        />
+        {usernameError && (
+          <p style={{ color: '#f87171', fontSize: '0.82rem', marginBottom: 10 }}>{usernameError}</p>
+        )}
+        <button
+          onClick={handleSetUsername}
+          disabled={newUsername.trim().length < 3}
+          style={{
+            width: '100%', padding: '11px', borderRadius: 10,
+            background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+            border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem',
+            cursor: newUsername.trim().length < 3 ? 'not-allowed' : 'pointer',
+            opacity: newUsername.trim().length < 3 ? 0.5 : 1,
             minHeight: 44,
           }}
         >
-          + Add Question
+          Confirm & Start Quiz →
         </button>
       </div>
+    </div>
+  )
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: '1.25rem', flexWrap: 'wrap' }}>
-        <input
-          placeholder="Search questions or answers…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ ...inputStyle, flex: '1 1 200px', minWidth: 0 }}
-        />
-        <select
-          value={typeFilter}
-          onChange={e => setTypeFilter(e.target.value)}
-          style={{ ...inputStyle, width: 'auto', flex: '0 0 auto' }}
-        >
-          <option value="all">All Types</option>
-          {validTypes.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select
-          value={strictFilter}
-          onChange={e => setStrictFilter(e.target.value)}
-          style={{ ...inputStyle, width: 'auto', flex: '0 0 auto' }}
-        >
-          <option value="all">All Strictness</option>
-          {validStrictness.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </div>
+  // ── Main quiz UI ───────────────────────────────────────────────────────
 
-      {/* Questions list */}
-      {filtered.length === 0 ? (
-        <div style={{
-          background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.07)',
-          borderRadius: 14, padding: '3rem', textAlign: 'center', color: '#475569',
-        }}>
-          {questions.length === 0 ? 'No questions yet. Click "+ Add Question" to start.' : 'No questions match your filters.'}
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {filtered.map((q, i) => (
-            <div
-              key={q.id}
-              style={{
-                background: 'rgba(255,255,255,0.025)',
-                border: '1px solid rgba(148,163,184,0.08)',
-                borderRadius: 12,
-                padding: '14px 16px',
-                display: 'flex', alignItems: 'flex-start',
-                justifyContent: 'space-between', gap: 16,
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
-                  <span style={{
-                    background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.2)',
-                    color: '#818cf8', borderRadius: 5, padding: '2px 7px',
-                    fontSize: '0.7rem', fontWeight: 700,
-                  }}>
-                    Q{i + 1}
-                  </span>
-                  <span style={{ color: '#e2e8f0', fontSize: '0.875rem', fontWeight: 500 }}>
-                    {q.text}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                  <span style={{ color: '#4ade80', fontSize: '0.78rem' }}>
-                    ✓ {q.correct_answer}
-                  </span>
-                  {[
-                    { label: q.type ?? 'obj_text' },
-                    { label: `${q.weightage}pt` },
-                    { label: q.strictness_level },
-                  ].map(({ label }) => (
-                    <span key={label} style={{
-                      color: '#475569', fontSize: '0.72rem',
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(148,163,184,0.08)',
-                      borderRadius: 5, padding: '2px 7px',
-                    }}>
-                      {label}
-                    </span>
-                  ))}
-                </div>
-              </div>
+  // True if the current question is MCQ
+  const qIsMcq = q?.type?.includes('mcq') ?? false
+  // Safely parse options array
+  const qOptions: string[] = Array.isArray(q?.options) ? q.options : []
 
-              <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                <button
-                  onClick={() => setEditing({ ...q })}
-                  style={{
-                    background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.18)',
-                    color: '#818cf8', borderRadius: 7, padding: '6px 12px',
-                    fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
-                    minHeight: 34,
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => q.id && handleDelete(q.id)}
-                  style={{
-                    background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)',
-                    color: '#f87171', borderRadius: 7, padding: '6px 12px',
-                    fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
-                    minHeight: 34,
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+  return (
+    <div style={{ minHeight: '100vh', background: '#020617', color: '#f1f5f9' }}>
 
-      {/* ── EDIT / ADD MODAL ──
-          zIndex: 110 — above sidebar (95) and mobile topbar (100)
-          display: 'block' + overflowY: 'auto' — allows scrolling on small screens
-          (flex + alignItems:center prevents overflow-y from working)
-      ── */}
-      {editing && (
-        <div
-          onClick={e => { if (e.target === e.currentTarget) setEditing(null) }}
-          style={{
-            position: 'fixed', inset: 0,
-            zIndex: 110,
-            background: 'rgba(2,6,23,0.85)',
-            backdropFilter: 'blur(8px)',
-            overflowY: 'auto',
-            display: 'block',
-            padding: '1rem',
-          }}
-        >
-          <div style={{
-            background: '#0f172a',
-            border: '1px solid rgba(148,163,184,0.1)',
-            borderRadius: 18, padding: '1.75rem',
-            width: '100%', maxWidth: 560,
-            margin: '0 auto',
-            boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
-          }}>
-            {/* Modal header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.15rem', color: '#f1f5f9' }}>
-                {editing.id ? 'Edit Question' : 'Add Question'}
-              </h2>
-              <button
-                onClick={() => setEditing(null)}
-                style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1, padding: '4px 6px', minHeight: 32, minWidth: 32 }}
-              >
-                ×
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-
-              {/* Question Text */}
-              <div>
-                <FieldLabel>Question Text *</FieldLabel>
-                <textarea
-                  rows={3}
-                  value={editing.text}
-                  onChange={e => setEditing({ ...editing, text: e.target.value })}
-                  placeholder="Enter the question…"
-                  style={{ ...inputStyle, resize: 'none', lineHeight: 1.6 }}
-                />
-              </div>
-
-              {/* Type + Strictness — stack on narrow modal */}
-              <div className="modal-grid-2">
-                <div>
-                  <FieldLabel>Type</FieldLabel>
-                  <select
-                    value={editing.type ?? 'objective_text'}
-                    onChange={e => setEditing({ ...editing, type: e.target.value })}
-                    style={inputStyle}
-                  >
-                    {validTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <FieldLabel>Strictness</FieldLabel>
-                  <select
-                    value={editing.strictness_level}
-                    onChange={e => setEditing({ ...editing, strictness_level: e.target.value })}
-                    style={inputStyle}
-                  >
-                    {validStrictness.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Correct Answer */}
-              <div>
-                <FieldLabel>Correct Answer *</FieldLabel>
-                <input
-                  type="text"
-                  value={editing.correct_answer}
-                  onChange={e => setEditing({ ...editing, correct_answer: e.target.value })}
-                  placeholder="Expected answer"
-                  style={inputStyle}
-                />
-              </div>
-
-              {/* Keywords + Synonyms — stack on narrow modal */}
-              <div className="modal-grid-2">
-                <div>
-                  <FieldLabel>Accepted Keywords</FieldLabel>
-                  <input
-                    type="text"
-                    value={editing.accepted_keywords.join(', ')}
-                    onChange={e => setEditing({ ...editing, accepted_keywords: e.target.value.split(',').map(s => s.trim()) })}
-                    placeholder="kw1, kw2"
-                    style={inputStyle}
-                  />
-                </div>
-                <div>
-                  <FieldLabel>Synonyms</FieldLabel>
-                  <input
-                    type="text"
-                    value={editing.synonyms.join(', ')}
-                    onChange={e => setEditing({ ...editing, synonyms: e.target.value.split(',').map(s => s.trim()) })}
-                    placeholder="syn1, syn2"
-                    style={inputStyle}
-                  />
-                </div>
-              </div>
-
-              {/* Weightage */}
-              <div style={{ maxWidth: 140 }}>
-                <FieldLabel>Weightage (pts)</FieldLabel>
-                <input
-                  type="number"
-                  value={editing.weightage}
-                  min={0} max={100} step={0.5}
-                  onChange={e => setEditing({ ...editing, weightage: Number(e.target.value) })}
-                  style={inputStyle}
-                />
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1.5rem', flexWrap: 'wrap' }}>
-              <button
-                onClick={() => setEditing(null)}
-                style={{
-                  padding: '9px 18px', borderRadius: 8,
-                  background: 'transparent', border: '1px solid rgba(148,163,184,0.15)',
-                  color: '#64748b', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600,
-                  minHeight: 44,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={save}
-                disabled={saving || !editing.text || !editing.correct_answer}
-                style={{
-                  padding: '9px 22px', borderRadius: 8,
-                  background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-                  border: 'none', color: '#fff',
-                  cursor: saving ? 'not-allowed' : 'pointer',
-                  fontSize: '0.875rem', fontWeight: 700,
-                  opacity: (saving || !editing.text || !editing.correct_answer) ? 0.55 : 1,
-                  boxShadow: '0 3px 12px rgba(99,102,241,0.3)',
-                  minHeight: 44,
-                }}
-              >
-                {saving ? 'Saving…' : editing.id ? 'Save Changes' : 'Add Question'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Excel Upload Section ── */}
+      {/* ── STICKY HEADER BAR ── */}
       <div style={{
-        marginTop: '2.5rem',
-        border: '1px solid rgba(148,163,184,0.07)',
-        borderRadius: 14, padding: '1.25rem 1.5rem',
-        background: 'rgba(255,255,255,0.015)',
+        position: 'sticky', top: 0, zIndex: 20,
+        background: 'rgba(2,6,23,0.92)', backdropFilter: 'blur(20px)',
+        borderBottom: '1px solid rgba(148,163,184,0.08)',
+        padding: '0 1rem',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
-          <div>
-            <p style={{ color: '#e2e8f0', fontSize: '0.875rem', fontWeight: 600, marginBottom: 2 }}>Bulk Upload via Excel</p>
-            <p style={{ color: '#475569', fontSize: '0.75rem' }}>
-              Required columns: <code style={{ color: '#818cf8', fontSize: '0.72rem' }}>Question</code>, <code style={{ color: '#818cf8', fontSize: '0.72rem' }}>Answer</code> — optional: Keywords, Synonyms, Strictness, Type, Weightage
+        <div style={{ maxWidth: 720, margin: '0 auto', height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+
+          {/* Quiz name */}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activity?.title}
+            </p>
+            <p style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: 1 }}>
+              Q{currentQ + 1}/{questions.length} · {answered} answered
             </p>
           </div>
-          {xlsxPreview.length === 0 && (
-            <label style={{ cursor: 'pointer' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7,
-                padding: '8px 16px', borderRadius: 8,
-                background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)',
-                color: '#818cf8', fontSize: '0.8rem', fontWeight: 600,
-                minHeight: 36,
-              }}>
-                {xlsxParsing ? 'Parsing…' : '↑ Choose .xlsx / .csv'}
-              </span>
-              <input
-                ref={xlsxInputRef}
-                type="file" accept=".xlsx,.xls,.csv"
-                onChange={handleXlsxFile}
-                disabled={xlsxParsing}
-                style={{ display: 'none' }}
-              />
-            </label>
-          )}
+
+          {/* Timer */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '5px 10px', borderRadius: 10,
+            background: urgent ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.1)',
+            border: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.2)'}`,
+            transition: 'all 0.5s',
+            flexShrink: 0,
+          }}>
+            <span style={{ fontSize: '0.85rem' }}>⏱</span>
+            <span style={{
+              fontFamily: 'monospace', fontWeight: 700, fontSize: '0.95rem',
+              color: urgent ? '#f87171' : '#818cf8',
+              animation: urgent ? 'timerPulse 1s ease-in-out infinite' : 'none',
+            }}>
+              {mins}:{secs}
+            </span>
+          </div>
+
+          {/* Progress fraction */}
+          <span style={{ color: '#334155', fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>
+            {currentQ + 1}/{questions.length}
+          </span>
         </div>
 
-        {xlsxError && (
-          <p style={{ color: '#f87171', fontSize: '0.8rem', marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', borderRadius: 8 }}>
-            {xlsxError}
-          </p>
-        )}
+        {/* Progress bar */}
+        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', margin: '0 1rem' }}>
+          <div style={{
+            height: '100%',
+            background: urgent
+              ? 'linear-gradient(90deg,#ef4444,#f87171)'
+              : 'linear-gradient(90deg,#6366f1,#8b5cf6)',
+            width: `${((currentQ + 1) / Math.max(questions.length, 1)) * 100}%`,
+            transition: 'width 0.3s ease, background 0.5s',
+            borderRadius: 99,
+          }} />
+        </div>
+      </div>
 
-        {xlsxPreview.length > 0 && (
-          <div>
-            <p style={{ color: '#94a3b8', fontSize: '0.8rem', marginBottom: 10 }}>
-              {xlsxPreview.length} question{xlsxPreview.length !== 1 ? 's' : ''} ready — review before uploading:
-            </p>
+      {/* ── QUESTION CONTENT ── */}
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '1.5rem 1rem 6rem' }}>
 
-            <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid rgba(148,163,184,0.08)' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', minWidth: 480 }}>
-                <thead>
-                  <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
-                    {['#', 'Question', 'Answer', 'Keywords', 'Strictness', 'Type', 'Pts'].map(h => (
-                      <th key={h} style={{ padding: '9px 12px', textAlign: 'left', color: '#475569', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {xlsxPreview.slice(0, 8).map((q, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid rgba(148,163,184,0.06)' }}>
-                      <td style={{ padding: '9px 12px', color: '#475569' }}>{i + 1}</td>
-                      <td style={{ padding: '9px 12px', color: '#e2e8f0', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={q.text}>{q.text}</td>
-                      <td style={{ padding: '9px 12px', color: '#4ade80', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.correct_answer}</td>
-                      <td style={{ padding: '9px 12px', color: '#64748b', fontSize: '0.72rem' }}>{q.accepted_keywords.join(', ') || '—'}</td>
-                      <td style={{ padding: '9px 12px', color: '#64748b' }}>{q.strictness_level}</td>
-                      <td style={{ padding: '9px 12px', color: '#64748b', fontSize: '0.72rem' }}>{q.type}</td>
-                      <td style={{ padding: '9px 12px', color: '#f59e0b', fontWeight: 600 }}>{q.weightage}</td>
-                    </tr>
-                  ))}
-                  {xlsxPreview.length > 8 && (
-                    <tr><td colSpan={7} style={{ padding: '8px 12px', color: '#334155', fontStyle: 'italic' }}>…and {xlsxPreview.length - 8} more</td></tr>
+        {q ? (
+          <>
+            {/* Question card */}
+            <div style={{
+              background: 'rgba(15,23,42,0.8)',
+              border: '1px solid rgba(148,163,184,0.1)',
+              borderRadius: 16, padding: '1.25rem',
+              marginBottom: '1.25rem',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+            }}>
+              {/* Q badge + pts */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.875rem' }}>
+                <span style={{
+                  background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)',
+                  color: '#818cf8', borderRadius: 7, padding: '3px 9px',
+                  fontSize: '0.72rem', fontWeight: 700,
+                }}>
+                  Q{currentQ + 1}
+                </span>
+                {q.weightage > 1 && (
+                  <span style={{ color: '#f59e0b', fontSize: '0.72rem', fontWeight: 600 }}>
+                    {q.weightage} pts
+                  </span>
+                )}
+                {qIsMcq && (
+                  <span style={{
+                    background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)',
+                    color: '#a78bfa', borderRadius: 5, padding: '2px 7px',
+                    fontSize: '0.68rem', fontWeight: 700,
+                  }}>
+                    MCQ
+                  </span>
+                )}
+              </div>
+
+              {/* ── Image (if present) — rendered ABOVE question text ── */}
+              {q.image_url && (
+                <img
+                  src={q.image_url}
+                  alt="Question image"
+                  style={{
+                    width: '100%',
+                    height: 'auto',
+                    borderRadius: 10,
+                    marginBottom: '1rem',
+                    display: 'block',
+                    maxHeight: 360,
+                    objectFit: 'contain',
+                  }}
+                />
+              )}
+
+              {/* Question text */}
+              <p style={{
+                fontSize: '1rem', lineHeight: 1.7,
+                color: '#e2e8f0', fontWeight: 400,
+                marginBottom: '1.25rem',
+              }}>
+                {q.text}
+              </p>
+
+              {/* ── ANSWER INPUT — conditional on type ── */}
+              {qIsMcq ? (
+                // ── MCQ: selectable option buttons ──
+                // Answers stored as STRING index: '0', '1', '2', …
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {qOptions.map((opt: string, idx: number) => {
+                    const idxStr  = String(idx)
+                    const selected = answers[q.id] === idxStr
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => setAnswers(prev => ({ ...prev, [q.id]: idxStr }))}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 12,
+                          padding: '12px 14px', borderRadius: 10,
+                          background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)',
+                          border: selected
+                            ? '1.5px solid rgba(99,102,241,0.55)'
+                            : '1.5px solid rgba(148,163,184,0.1)',
+                          color: selected ? '#e2e8f0' : '#94a3b8',
+                          fontSize: '0.95rem', textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s',
+                          width: '100%',
+                        }}
+                      >
+                        {/* Option letter indicator */}
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+                          background: selected ? '#6366f1' : 'rgba(148,163,184,0.1)',
+                          color: selected ? '#fff' : '#64748b',
+                          fontSize: '0.75rem', fontWeight: 700,
+                          transition: 'all 0.15s',
+                        }}>
+                          {String.fromCharCode(65 + idx)}
+                        </span>
+                        {opt}
+                      </button>
+                    )
+                  })}
+                  {qOptions.length === 0 && (
+                    <p style={{ color: '#475569', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                      No options configured for this question.
+                    </p>
                   )}
-                </tbody>
-              </table>
+                </div>
+              ) : (
+                // ── Objective: text textarea (unchanged) ──
+                <textarea
+                  value={answers[q.id] || ''}
+                  onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+                  placeholder="Type your answer here…"
+                  rows={4}
+                  style={{
+                    width: '100%', resize: 'vertical',
+                    background: 'rgba(2,6,23,0.7)',
+                    border: '1.5px solid rgba(148,163,184,0.1)',
+                    borderRadius: 12, padding: '12px 14px',
+                    color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
+                    outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
+                    fontFamily: 'inherit',
+                  }}
+                  onFocus={e => {
+                    e.target.style.borderColor = 'rgba(99,102,241,0.55)'
+                    e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)'
+                  }}
+                  onBlur={e => {
+                    e.target.style.borderColor = 'rgba(148,163,184,0.1)'
+                    e.target.style.boxShadow = 'none'
+                  }}
+                />
+              )}
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+            {/* Navigation */}
+            <div className="quiz-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+
               <button
-                onClick={confirmXlsxUpload}
-                disabled={xlsxUploading}
+                disabled={currentQ === 0}
+                onClick={() => setCurrentQ(p => p - 1)}
                 style={{
-                  padding: '8px 18px', borderRadius: 8,
-                  background: 'linear-gradient(135deg,#22c55e,#16a34a)',
-                  border: 'none', color: '#fff',
-                  fontWeight: 700, fontSize: '0.875rem', cursor: 'pointer',
-                  opacity: xlsxUploading ? 0.6 : 1, minHeight: 40,
+                  padding: '10px 16px', borderRadius: 10,
+                  background: 'transparent',
+                  border: '1px solid rgba(148,163,184,0.12)',
+                  color: currentQ === 0 ? '#1e293b' : '#94a3b8',
+                  cursor: currentQ === 0 ? 'default' : 'pointer',
+                  fontSize: '0.875rem', fontWeight: 600,
+                  transition: 'all 0.15s', minHeight: 44,
+                  flexShrink: 0,
                 }}
               >
-                {xlsxUploading ? 'Uploading…' : `✓ Upload ${xlsxPreview.length} Question${xlsxPreview.length !== 1 ? 's' : ''}`}
+                ← Prev
               </button>
-              <button
-                onClick={cancelXlsxUpload}
-                style={{
-                  padding: '8px 16px', borderRadius: 8,
-                  background: 'transparent', border: '1px solid rgba(148,163,184,0.15)',
-                  color: '#64748b', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600,
-                  minHeight: 40,
-                }}
-              >
-                Cancel
-              </button>
+
+              {/* Question dot navigator */}
+              <div className="quiz-nav-dots" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
+                {questions.map((_, i) => {
+                  const isAnswered = !!answers[questions[i].id]
+                  const isCurrent  = i === currentQ
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setCurrentQ(i)}
+                      title={`Q${i + 1}`}
+                      style={{
+                        width: 30, height: 30, borderRadius: 8,
+                        border: 'none', cursor: 'pointer',
+                        fontSize: '0.7rem', fontWeight: 700,
+                        background: isCurrent
+                          ? '#6366f1'
+                          : isAnswered
+                            ? 'rgba(34,197,94,0.2)'
+                            : 'rgba(255,255,255,0.05)',
+                        color: isCurrent ? '#fff' : isAnswered ? '#4ade80' : '#475569',
+                        outline: isCurrent ? '2px solid rgba(99,102,241,0.4)' : 'none',
+                        outlineOffset: 2,
+                        transition: 'all 0.15s',
+                        minHeight: 30,
+                      }}
+                    >
+                      {i + 1}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {currentQ < questions.length - 1 ? (
+                <button
+                  onClick={() => setCurrentQ(p => p + 1)}
+                  style={{
+                    padding: '10px 16px', borderRadius: 10,
+                    background: 'rgba(99,102,241,0.15)',
+                    border: '1px solid rgba(99,102,241,0.25)',
+                    color: '#818cf8', cursor: 'pointer',
+                    fontSize: '0.875rem', fontWeight: 700,
+                    transition: 'all 0.15s', minHeight: 44,
+                    flexShrink: 0,
+                  }}
+                >
+                  Next →
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={saving}
+                  style={{
+                    padding: '10px 18px', borderRadius: 10,
+                    background: saving ? 'rgba(34,197,94,0.4)' : 'linear-gradient(135deg,#22c55e,#16a34a)',
+                    border: 'none', color: '#fff',
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    fontSize: '0.875rem', fontWeight: 700,
+                    boxShadow: '0 4px 16px rgba(34,197,94,0.25)',
+                    transition: 'all 0.15s', minHeight: 44,
+                    opacity: saving ? 0.7 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {saving ? 'Submitting…' : '✓ Submit'}
+                </button>
+              )}
             </div>
-          </div>
+
+            {/* Answered count */}
+            <p style={{ textAlign: 'center', color: '#334155', fontSize: '0.72rem', marginTop: '1rem' }}>
+              {answered} of {questions.length} answered
+            </p>
+          </>
+        ) : (
+          <p style={{ color: '#475569', textAlign: 'center', paddingTop: '4rem' }}>No questions found.</p>
         )}
       </div>
 
-      {/* ── Responsive: stack modal 2-col grids on narrow screens ── */}
+      {/* ── Animations + responsive nav fix ── */}
       <style>{`
-        .modal-grid-2 {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 12px;
+        @keyframes timerPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.6; }
         }
-        @media (max-width: 420px) {
-          .modal-grid-2 {
-            grid-template-columns: 1fr;
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (max-width: 540px) {
+          .quiz-nav {
+            flex-wrap: wrap;
+            gap: 10px;
+          }
+          .quiz-nav-dots {
+            flex-basis: 100%;
+            order: -1;
+            flex: none;
           }
         }
       `}</style>
