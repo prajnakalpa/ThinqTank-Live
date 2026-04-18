@@ -18,7 +18,7 @@ interface Q {
   options?: string[]
   correct_option?: number
   // Image field
-  image_url?: string
+  image_url?: string | null
 }
 
 const validTypes      = ['objective_text', 'objective_media', 'mcq_text', 'mcq_media']
