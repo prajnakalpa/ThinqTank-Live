@@ -116,7 +116,6 @@ export default function Navbar() {
                 background: 'rgba(255,255,255,0.05)',
                 border: '1px solid rgba(148,163,184,0.1)',
                 borderRadius: 8,
-                // 44×44 touch target
                 width: 44,
                 height: 44,
                 cursor: 'pointer',
@@ -142,14 +141,13 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* ── MOBILE MENU OVERLAY ── */}
       {/* Full-screen backdrop to close menu when tapping outside */}
       {open && (
         <div
           onClick={() => setOpen(false)}
           style={{
             position: 'fixed', inset: 0,
-            zIndex: 98, // below menu (99), above content
+            zIndex: 98,
             background: 'transparent',
           }}
           aria-hidden="true"
@@ -168,13 +166,10 @@ export default function Navbar() {
           background: 'rgba(2,6,23,0.97)',
           backdropFilter: 'blur(20px)',
           padding: '8px 12px 12px',
-          // Scroll if menu is taller than remaining viewport
           maxHeight: 'calc(100dvh - 64px)',
           overflowY: 'auto',
-          // Prevent tap-through to content below
           pointerEvents: 'all',
         }}>
-          {/* Nav links */}
           {NAV_LINKS.map(({ href, label }) => (
             <Link
               key={href}
@@ -183,7 +178,7 @@ export default function Navbar() {
               style={{
                 display: 'flex', alignItems: 'center',
                 padding: '0 14px',
-                height: 48, // ≥44px touch target
+                height: 48,
                 borderRadius: 8,
                 color: path === href ? '#e2e8f0' : '#64748b',
                 background: path === href ? 'rgba(139,92,246,0.1)' : 'transparent',
@@ -196,7 +191,6 @@ export default function Navbar() {
             </Link>
           ))}
 
-          {/* Admin link — only for admin users */}
           {isAdmin && (
             <Link
               href="/admin"
@@ -216,7 +210,6 @@ export default function Navbar() {
             </Link>
           )}
 
-          {/* Auth divider + Sign Out / Sign In */}
           <div style={{ marginTop: 6, paddingTop: 10, borderTop: '1px solid rgba(148,163,184,0.08)' }}>
             {user ? (
               <button
