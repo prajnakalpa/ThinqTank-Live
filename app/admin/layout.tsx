@@ -34,7 +34,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const initials = user.email?.slice(0, 2).toUpperCase() ?? 'AD'
 
   return (
-    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex' }}>
+    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', overflowX: 'hidden' }}>
 
       {/* ── MOBILE TOP BAR ── */}
       <div
@@ -64,14 +64,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       </div>
 
       {/* ── SIDEBAR BACKDROP (tap outside to close on mobile) ── */}
-      {/* Visibility controlled by MobileSidebarToggle via getElementById */}
       <div
         id="sidebarBackdrop"
         style={{
           display: 'none',
           position: 'fixed', inset: 0,
           background: 'rgba(0,0,0,0.5)',
-          zIndex: 90, // below sidebar (95) but above main content
+          zIndex: 90,
         }}
       />
 
@@ -124,7 +123,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               fontSize: '0.875rem', fontWeight: 500,
               color: '#64748b', textDecoration: 'none',
               transition: 'all 0.15s',
-              minHeight: 44, // touch target
+              minHeight: 44,
             }}>
               <span style={{ fontSize: '0.9rem', opacity: 0.8 }}>{icon}</span>
               {label}
@@ -159,7 +158,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       {/* ── MAIN ── */}
       <main
         id="mainContent"
-        style={{ flex: 1, marginLeft: 230, minHeight: '100vh', padding: '2rem 2.5rem' }}
+        style={{ flex: 1, marginLeft: 230, minHeight: '100vh', padding: '2rem 2.5rem', overflowX: 'hidden' }}
       >
         {children}
       </main>
