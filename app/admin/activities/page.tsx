@@ -17,7 +17,7 @@ export default async function ActivitiesPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
+      <div className="admin-page-header">
         <div>
           <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.8rem', color: '#f1f5f9', marginBottom: 4 }}>Activities</h1>
           <p style={{ color: '#475569', fontSize: '0.875rem' }}>Manage all quizzes and events.</p>
@@ -32,8 +32,8 @@ export default async function ActivitiesPage() {
           <Link href="/admin/activities/new" className="btn-primary" style={{ textDecoration: 'none', padding: '9px 20px', fontSize: '0.875rem' }}>Create First Quiz</Link>
         </div>
       ) : (
-        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div className="table-scroll">
+          <table>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.06)', background: 'rgba(255,255,255,0.02)' }}>
                 {['Title', 'Status', 'Duration', 'Participants', ''].map(h => (
