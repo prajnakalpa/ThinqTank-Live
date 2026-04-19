@@ -61,7 +61,6 @@ function wordMatch(user: string, target: string, tolerance: number) {
 
 /**
  * CONTROLLED PHONETIC MATCH
- * Applies ONLY when structure is similar
  */
 function phoneticMatch(user: string, target: string, tolerance: number) {
   const ua = normalize(user)
@@ -70,13 +69,9 @@ function phoneticMatch(user: string, target: string, tolerance: number) {
   const userWords = ua.split(' ')
   const targetWords = tt.split(' ')
 
-  // SAFETY 1: word count must be close
   if (Math.abs(userWords.length - targetWords.length) > 1) return false
-
-  // SAFETY 2: avoid short noisy matches
   if (ua.length < 4 || tt.length < 4) return false
 
-  // Apply phonetic normalization AFTER checks
   const uaPh = phoneticNormalize(ua)
   const ttPh = phoneticNormalize(tt)
 
@@ -94,31 +89,19 @@ function isMatch(userAnswer: string, targetTerm: string, strictness: string): bo
 
   if (!ua || !tt) return false
 
-  // STRICT
-  if (strictness === 'strict') {
-    return ua === tt
-  }
+  if (strictness === 'strict') return ua === tt
 
-  // MEDIUM
   if (strictness === 'medium') {
     if (ua === tt) return true
-
     if (wordMatch(ua, tt, 1)) return true
-
-    // phonetic fallback (tight + controlled)
     if (phoneticMatch(ua, tt, 1)) return true
-
     return false
   }
 
-  // LOOSE
   if (strictness === 'loose') {
     if (ua === tt) return true
-
     if (wordMatch(ua, tt, 2)) return true
-
     if (phoneticMatch(ua, tt, 2)) return true
-
     return false
   }
 
@@ -157,7 +140,20 @@ export function evaluateSubmission(
   let total = 0
 
   for (const q of questions) {
-    const pts = evaluateAnswer(q, answers[q.id] || '')
+    const userAnswer = answers[q.id]
+
+    let pts = 0
+
+    // ✅ MCQ HANDLING (no schema change, safe cast)
+    if ((q as any).correct_option !== undefined && (q as any).correct_option !== null) {
+      if (userAnswer === String((q as any).correct_option)) {
+        pts = q.weightage || 1
+      }
+    } else {
+      // existing objective logic untouched
+      pts = evaluateAnswer(q, userAnswer || '')
+    }
+
     scores[q.id] = pts
     total += pts
   }
