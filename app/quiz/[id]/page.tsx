@@ -6,8 +6,49 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { getSecondsRemaining, formatTime } from '@/lib/quiz-state'
+import { evaluateAnswer } from '@/lib/evaluation'
 
 interface Props { params: { id: string } }
+
+// ── Per-question breakdown helpers ────────────────────────────────────────
+// These live outside the component so they are not re-created on every render.
+
+/** Decode the user's raw stored answer into human-readable text. */
+function decodeUserAnswer(q: any, rawAnswer: string | undefined): string {
+  if (!rawAnswer && rawAnswer !== '0') return 'Not Answered'
+  if (q.type?.includes('mcq')) {
+    const idx = Number(rawAnswer)
+    if (!isNaN(idx) && Array.isArray(q.options) && q.options[idx] != null) {
+      return q.options[idx]
+    }
+    return 'Not Answered'
+  }
+  return rawAnswer || 'Not Answered'
+}
+
+/** Decode the correct answer into human-readable text. */
+function decodeCorrectAnswer(q: any): string {
+  if (q.type?.includes('mcq')) {
+    const idx = q.correct_option ?? 0
+    if (Array.isArray(q.options) && q.options[idx] != null) return q.options[idx]
+    return '—'
+  }
+  return q.correct_answer || '—'
+}
+
+/** Return true if the raw stored answer is correct for this question. */
+function checkIsCorrect(q: any, rawAnswer: string | undefined): boolean {
+  if (!rawAnswer && rawAnswer !== '0') return false
+  if (q.type?.includes('mcq')) {
+    return rawAnswer === String(q.correct_option ?? -1)
+  }
+  // Objective: use the same fuzzy evaluator as the backend
+  try {
+    return evaluateAnswer(q, rawAnswer) > 0
+  } catch {
+    return false
+  }
+}
 
 export default function QuizPage({ params }: Props) {
   const [state,         setState]         = useState<'loading'|'username'|'quiz'|'submitted'|'closed'|'error'>('loading')
@@ -37,11 +78,6 @@ export default function QuizPage({ params }: Props) {
   useEffect(() => { quizRef.current       = quiz       }, [quiz])
 
   // ── TIME-PER-QUESTION TRACKING REFS ───────────────────────────────────
-  // timeMapRef:         { [questionId]: seconds_spent }
-  // lastSwitchTimeRef:  ms timestamp of when we arrived on the current question
-  // currentQRef:        index of the question we were PREVIOUSLY on
-  //                     (updated AFTER accumulating, so it lags currentQ by 1 cycle)
-  // questionsRef:       ref-safe mirror of questions[] for use inside timer/auto-submit
   const timeMapRef        = useRef<Record<string, number>>({})
   const lastSwitchTimeRef = useRef<number>(Date.now())
   const currentQRef       = useRef<number>(0)
@@ -49,8 +85,6 @@ export default function QuizPage({ params }: Props) {
 
   useEffect(() => { questionsRef.current = questions }, [questions])
 
-  // Reset tracking baseline when the quiz becomes active so Q1's time
-  // doesn't include the loading / username-setup period.
   useEffect(() => {
     if (state === 'quiz') {
       lastSwitchTimeRef.current = Date.now()
@@ -58,23 +92,16 @@ export default function QuizPage({ params }: Props) {
     }
   }, [state])
 
-  // ── Accumulate time on every question change ───────────────────────────
-  // Strategy: currentQRef still holds the OLD index when this effect fires.
-  // We record elapsed time for that old question, then advance currentQRef.
   useEffect(() => {
     if (state !== 'quiz' || questionsRef.current.length === 0) return
-
     const now = Date.now()
     const prevQ = questionsRef.current[currentQRef.current]
-
     if (prevQ?.id) {
       const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
       if (delta > 0) {
         timeMapRef.current[prevQ.id] = (timeMapRef.current[prevQ.id] || 0) + delta
       }
     }
-
-    // Advance to new position and reset the stopwatch
     currentQRef.current = currentQ
     lastSwitchTimeRef.current = now
   }, [currentQ]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -83,8 +110,6 @@ export default function QuizPage({ params }: Props) {
   const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
     if (submittingRef.current) return
     submittingRef.current = true
-
-    // Capture final question time before touching anything else
     const now = Date.now()
     const currentId = questionsRef.current[currentQRef.current]?.id
     if (currentId) {
@@ -93,9 +118,7 @@ export default function QuizPage({ params }: Props) {
         timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
       }
     }
-
     const timePerQuestion = { ...timeMapRef.current }
-
     await supabase.from('submissions').update({
       answers: currentAnswers,
       is_complete: true,
@@ -103,7 +126,6 @@ export default function QuizPage({ params }: Props) {
       time_taken_seconds: duration,
       time_per_question: timePerQuestion,
     }).eq('id', subId)
-
     await fetch('/api/quiz/submit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ submissionId: subId, time_per_question: timePerQuestion }),
@@ -219,7 +241,6 @@ export default function QuizPage({ params }: Props) {
     submittingRef.current = true
     setSaving(true)
 
-    // ── CAPTURE FINAL QUESTION TIME — MUST BE FIRST ──────────────────────
     const now = Date.now()
     const currentId = questions[currentQ]?.id
     if (currentId) {
@@ -229,10 +250,8 @@ export default function QuizPage({ params }: Props) {
       }
     }
 
-    // Snapshot so subsequent async ops see a stable map
     const timePerQuestion = { ...timeMapRef.current }
 
-    // ── TIME CONSISTENCY CHECK (soft — never breaks flow) ─────────────────
     const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
     const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
     if (Math.abs(timeTaken - sumPerQ) > 30) {
@@ -288,16 +307,288 @@ export default function QuizPage({ params }: Props) {
     </div>
   )
 
-  if (state === 'submitted') return (
-    <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
-      <div style={{ maxWidth: 440, width: '100%', textAlign: 'center', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 20, padding: '2.5rem' }}>
-        <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
-        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#f1f5f9', marginBottom: 8 }}>Quiz Submitted!</h1>
-        <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>Your responses have been recorded. Good luck!</p>
-        <button onClick={() => router.push('/')} style={{ padding: '10px 28px', borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>Back to Home</button>
+  // ── SUBMITTED: full per-question breakdown ─────────────────────────────
+  if (state === 'submitted') {
+    const subAnswers: Record<string, string> =
+      (submission?.answers && typeof submission.answers === 'object')
+        ? submission.answers : {}
+    const timeMap: Record<string, number> =
+      (submission?.time_per_question && typeof submission.time_per_question === 'object')
+        ? submission.time_per_question : {}
+    const finalScore  = submission?.final_score ?? null
+    const hasBreakdown = questions.length > 0
+
+    return (
+      <div style={{ minHeight: '100vh', background: '#020617', color: '#f1f5f9' }}>
+
+        {/* ── Top bar ── */}
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 20,
+          background: 'rgba(2,6,23,0.95)', backdropFilter: 'blur(20px)',
+          borderBottom: '1px solid rgba(148,163,184,0.08)',
+          padding: '0 1rem',
+        }}>
+          <div style={{ maxWidth: 720, margin: '0 auto', height: 52, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <span style={{ fontSize: '1.1rem' }}>🎉</span>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ color: '#f1f5f9', fontSize: '0.875rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {activity?.title ?? 'Quiz Submitted!'}
+                </p>
+                <p style={{ color: '#475569', fontSize: '0.72rem', marginTop: 1 }}>Results below</p>
+              </div>
+            </div>
+            <button
+              onClick={() => router.push('/')}
+              style={{
+                padding: '7px 16px', borderRadius: 8,
+                background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                border: 'none', color: '#fff', fontWeight: 600,
+                fontSize: '0.8rem', cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              Home
+            </button>
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 720, margin: '0 auto', padding: '1.5rem 1rem 4rem' }}>
+
+          {/* ── Score summary card ── */}
+          <div style={{
+            background: 'rgba(99,102,241,0.08)',
+            border: '1px solid rgba(99,102,241,0.2)',
+            borderRadius: 16, padding: '1.25rem 1.5rem',
+            marginBottom: '1.5rem',
+            display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+          }}>
+            <div style={{
+              width: 52, height: 52, borderRadius: '50%', flexShrink: 0,
+              background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '1.4rem',
+            }}>🎯</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                Your Score
+              </p>
+              <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.8rem', color: '#f1f5f9', lineHeight: 1 }}>
+                {finalScore != null ? finalScore : '—'}
+              </p>
+            </div>
+            {hasBreakdown && (
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <p style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                  Answered
+                </p>
+                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.2rem', color: '#e2e8f0' }}>
+                  {Object.values(subAnswers).filter(Boolean).length}
+                  <span style={{ color: '#475569', fontSize: '0.875rem', fontWeight: 400 }}> / {questions.length}</span>
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ── Per-question breakdown ── */}
+          {hasBreakdown ? (
+            <>
+              <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+                Question Breakdown
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {questions.map((qItem: any, idx: number) => {
+                  const rawAnswer    = subAnswers[qItem.id]
+                  const userDisplay  = decodeUserAnswer(qItem, rawAnswer)
+                  const correctDisp  = decodeCorrectAnswer(qItem)
+                  const isCorrect    = checkIsCorrect(qItem, rawAnswer)
+                  const notAnswered  = !rawAnswer && rawAnswer !== '0'
+                  const timeSpent    = timeMap[qItem.id] ?? 0
+
+                  // Left border colour: green = correct, amber = not answered, red = wrong
+                  const borderLeft = notAnswered
+                    ? '3px solid rgba(245,158,11,0.5)'
+                    : isCorrect
+                      ? '3px solid rgba(34,197,94,0.5)'
+                      : '3px solid rgba(239,68,68,0.4)'
+
+                  return (
+                    <div
+                      key={qItem.id}
+                      style={{
+                        background: 'rgba(255,255,255,0.025)',
+                        border: '1px solid rgba(148,163,184,0.08)',
+                        borderLeft,
+                        borderRadius: '0 12px 12px 0',
+                        padding: '14px 16px',
+                      }}
+                    >
+                      {/* Q header row */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, flexWrap: 'wrap' }}>
+                          <span style={{
+                            background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.2)',
+                            color: '#818cf8', borderRadius: 5, padding: '2px 7px',
+                            fontSize: '0.7rem', fontWeight: 700, flexShrink: 0,
+                          }}>
+                            Q{idx + 1}
+                          </span>
+                          {qItem.type?.includes('mcq') && (
+                            <span style={{
+                              background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)',
+                              color: '#a78bfa', borderRadius: 4, padding: '2px 6px',
+                              fontSize: '0.65rem', fontWeight: 700, flexShrink: 0,
+                            }}>MCQ</span>
+                          )}
+                          <span style={{ color: '#94a3b8', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                            {qItem.text}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                          {/* Status badge */}
+                          <span style={{
+                            fontSize: '1rem',
+                            title: notAnswered ? 'Not answered' : isCorrect ? 'Correct' : 'Incorrect',
+                          }}>
+                            {notAnswered ? '⚪' : isCorrect ? '✅' : '❌'}
+                          </span>
+                          {/* Time spent */}
+                          <span style={{
+                            color: '#475569', fontSize: '0.72rem',
+                            background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid rgba(148,163,184,0.08)',
+                            borderRadius: 5, padding: '2px 7px',
+                            fontFamily: 'monospace',
+                          }}>
+                            ⏱ {timeSpent}s
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Answer comparison */}
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: 8,
+                      }}
+                        className="breakdown-answer-grid"
+                      >
+                        {/* User's answer */}
+                        <div style={{
+                          background: 'rgba(255,255,255,0.02)',
+                          border: `1px solid ${notAnswered ? 'rgba(245,158,11,0.15)' : isCorrect ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
+                          borderRadius: 8, padding: '8px 10px',
+                        }}>
+                          <p style={{ color: '#475569', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                            Your Answer
+                          </p>
+                          <p style={{
+                            fontSize: '0.82rem', fontWeight: 500,
+                            color: notAnswered ? '#64748b' : isCorrect ? '#4ade80' : '#f87171',
+                            fontStyle: notAnswered ? 'italic' : 'normal',
+                            wordBreak: 'break-word',
+                          }}>
+                            {notAnswered ? '' : (isCorrect ? '✓ ' : '✗ ')}{userDisplay}
+                          </p>
+                        </div>
+
+                        {/* Correct answer */}
+                        <div style={{
+                          background: 'rgba(34,197,94,0.04)',
+                          border: '1px solid rgba(34,197,94,0.12)',
+                          borderRadius: 8, padding: '8px 10px',
+                        }}>
+                          <p style={{ color: '#475569', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                            Correct Answer
+                          </p>
+                          <p style={{ fontSize: '0.82rem', fontWeight: 500, color: '#4ade80', wordBreak: 'break-word' }}>
+                            {correctDisp}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* MCQ: show all options for context */}
+                      {qItem.type?.includes('mcq') && Array.isArray(qItem.options) && qItem.options.length > 0 && (
+                        <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {qItem.options.map((opt: string, optIdx: number) => {
+                            const isCorrectOpt = optIdx === (qItem.correct_option ?? -1)
+                            const isUserChoice  = rawAnswer === String(optIdx)
+                            return (
+                              <span key={optIdx} style={{
+                                padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem',
+                                background: isCorrectOpt
+                                  ? 'rgba(34,197,94,0.1)'
+                                  : isUserChoice && !isCorrectOpt
+                                    ? 'rgba(239,68,68,0.08)'
+                                    : 'rgba(255,255,255,0.03)',
+                                border: isCorrectOpt
+                                  ? '1px solid rgba(34,197,94,0.25)'
+                                  : isUserChoice && !isCorrectOpt
+                                    ? '1px solid rgba(239,68,68,0.2)'
+                                    : '1px solid rgba(148,163,184,0.06)',
+                                color: isCorrectOpt ? '#4ade80' : isUserChoice && !isCorrectOpt ? '#f87171' : '#475569',
+                                fontWeight: isCorrectOpt || isUserChoice ? 600 : 400,
+                              }}>
+                                {String.fromCharCode(65 + optIdx)}. {opt}
+                                {isCorrectOpt && ' ✓'}
+                                {isUserChoice && !isCorrectOpt && ' ✗'}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          ) : (
+            /* Fallback when questions aren't in state (edge case) */
+            <div style={{ textAlign: 'center', padding: '3rem', color: '#475569' }}>
+              <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
+              <p style={{ fontSize: '1rem', color: '#e2e8f0', marginBottom: 8, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700 }}>Quiz Submitted!</p>
+              <p>Your responses have been recorded. Good luck!</p>
+            </div>
+          )}
+
+          {/* ── Bottom CTA ── */}
+          <div style={{ display: 'flex', gap: 10, marginTop: '2rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => router.push('/')}
+              style={{
+                flex: 1, padding: '11px', borderRadius: 10,
+                background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                border: 'none', color: '#fff', fontWeight: 700,
+                fontSize: '0.9rem', cursor: 'pointer', minHeight: 44,
+              }}
+            >
+              Back to Home
+            </button>
+            <button
+              onClick={() => router.push('/leaderboard')}
+              style={{
+                padding: '11px 20px', borderRadius: 10,
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(148,163,184,0.12)',
+                color: '#94a3b8', fontWeight: 600,
+                fontSize: '0.9rem', cursor: 'pointer', minHeight: 44,
+              }}
+            >
+              Leaderboard
+            </button>
+          </div>
+        </div>
+
+        <style>{`
+          @media (max-width: 480px) {
+            .breakdown-answer-grid {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        `}</style>
       </div>
-    </div>
-  )
+    )
+  }
 
   if (state === 'closed') return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
