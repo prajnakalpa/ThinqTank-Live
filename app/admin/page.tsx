@@ -55,7 +55,7 @@ export default async function AdminDashboard() {
           style={{
             fontFamily: "'Space Grotesk', sans-serif",
             fontWeight: 600,
-            fontSize: '0.75rem', // ✅ fixed (only one fontSize now)
+            fontSize: '0.75rem',
             color: '#94a3b8',
             marginBottom: 12,
             textTransform: 'uppercase',
@@ -79,7 +79,7 @@ export default async function AdminDashboard() {
       </div>
 
       {/* Recent activities table */}
-      <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
+      <div className="table-scroll" style={{ borderRadius: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(148,163,184,0.06)' }}>
           <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, color: '#e2e8f0', fontSize: '0.95rem' }}>
             Recent Activities
@@ -94,7 +94,7 @@ export default async function AdminDashboard() {
             No activities yet.
           </div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.06)' }}>
                 {['Title', 'Status', 'Participants', 'Avg Score', ''].map(h => (
