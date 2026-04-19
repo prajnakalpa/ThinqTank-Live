@@ -1,6 +1,6 @@
 // app/admin/questions/[quizId]/page.tsx
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import * as XLSX from 'xlsx'
 
@@ -73,6 +73,10 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
   const [xlsxError,     setXlsxError]     = useState('')
   const xlsxInputRef = useRef<HTMLInputElement>(null)
 
+  // ── Analytics state ────────────────────────────────────────────────────
+  // question_stats: array of { question_id, attempts, correct, accuracy, avg_time }
+  const [analytics, setAnalytics] = useState<{ question_stats: any[] } | null>(null)
+
   const supabase = createClient()
 
   const getRealQuizId = async () => {
@@ -88,6 +92,16 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     const { data } = await supabase
       .from('questions').select('*').eq('quiz_id', qid).order('order_index')
     setQuestions(data ?? [])
+
+    // Fetch analytics for this activity (params.quizId is the activity_id)
+    const { data: analyticsData } = await supabase
+      .from('analytics')
+      .select('question_stats')
+      .eq('activity_id', params.quizId)
+      .single()
+    // analyticsData may be null if no submissions yet — safe default applied via state init
+    setAnalytics(analyticsData ?? null)
+
     setLoading(false)
   }
 
@@ -139,6 +153,29 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     await supabase.from('questions').delete().eq('id', id)
     setQuestions(p => p.filter(q => q.id !== id))
   }
+
+  // ── Analytics derived values (hydration-safe via useMemo) ────────────
+  // Only computed once data exists; safe defaults when analytics is null.
+
+  // Flat lookup: question_id → stat object  (O(1) per question)
+  const statsMap = useMemo<Record<string, any>>(() => {
+    const stats = analytics?.question_stats
+    if (!Array.isArray(stats) || stats.length === 0) return {}
+    return Object.fromEntries(
+      stats
+        .filter((s: any) => s?.question_id)
+        .map((s: any) => [s.question_id, s])
+    )
+  }, [analytics])
+
+  // Average avg_time across all questions with data (for speed tag baseline)
+  const totalAvgTime = useMemo<number>(() => {
+    const stats = analytics?.question_stats
+    if (!Array.isArray(stats) || stats.length === 0) return 0
+    const withTime = stats.filter((s: any) => typeof s?.avg_time === 'number')
+    if (withTime.length === 0) return 0
+    return withTime.reduce((sum: number, s: any) => sum + (s.avg_time || 0), 0) / withTime.length
+  }, [analytics])
 
   const filtered = questions.filter(q => {
     const s = search.toLowerCase()
@@ -364,6 +401,71 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
                     </span>
                   ))}
                 </div>
+
+                {/* ── Per-question analytics (renders only when data exists) ── */}
+                {q.id && statsMap[q.id] && (() => {
+                  const stat      = statsMap[q.id]
+                  const attempts  = stat.attempts  ?? 0
+                  const accuracy  = stat.accuracy  ?? 0
+                  const avg_time  = stat.avg_time  ?? 0
+
+                  // Difficulty tag
+                  const difficulty = accuracy >= 70
+                    ? { label: '🟢 Easy',   color: '#4ade80', bg: 'rgba(34,197,94,0.1)',  border: 'rgba(34,197,94,0.2)'  }
+                    : accuracy >= 40
+                      ? { label: '🟡 Medium', color: '#fbbf24', bg: 'rgba(251,191,36,0.1)', border: 'rgba(251,191,36,0.2)' }
+                      : { label: '🔴 Hard',   color: '#f87171', bg: 'rgba(239,68,68,0.1)',  border: 'rgba(239,68,68,0.2)'  }
+
+                  // Speed tag (only meaningful when totalAvgTime > 0)
+                  const speed = totalAvgTime > 0 && avg_time > totalAvgTime
+                    ? { label: '🐢 Slow', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.15)' }
+                    : { label: '⚡ Fast', color: '#818cf8', bg: 'rgba(99,102,241,0.08)',  border: 'rgba(99,102,241,0.15)'  }
+
+                  return (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+                      {/* Stat pills */}
+                      {[
+                        { label: `${attempts} attempt${attempts !== 1 ? 's' : ''}`, color: '#64748b' },
+                        { label: `${Number(accuracy).toFixed(1)}% accuracy`,        color: accuracy >= 70 ? '#4ade80' : accuracy >= 40 ? '#fbbf24' : '#f87171' },
+                        { label: `⏱ ${Number(avg_time).toFixed(1)}s avg`,           color: '#64748b' },
+                      ].map(({ label, color }) => (
+                        <span key={label} style={{
+                          fontSize: '0.7rem', fontFamily: 'monospace',
+                          color,
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(148,163,184,0.08)',
+                          borderRadius: 5, padding: '2px 7px',
+                        }}>
+                          {label}
+                        </span>
+                      ))}
+
+                      {/* Difficulty smart tag */}
+                      <span style={{
+                        fontSize: '0.68rem', fontWeight: 700,
+                        color: difficulty.color,
+                        background: difficulty.bg,
+                        border: `1px solid ${difficulty.border}`,
+                        borderRadius: 5, padding: '2px 8px',
+                      }}>
+                        {difficulty.label}
+                      </span>
+
+                      {/* Speed smart tag — only shown when we have a meaningful baseline */}
+                      {totalAvgTime > 0 && (
+                        <span style={{
+                          fontSize: '0.68rem', fontWeight: 700,
+                          color: speed.color,
+                          background: speed.bg,
+                          border: `1px solid ${speed.border}`,
+                          borderRadius: 5, padding: '2px 8px',
+                        }}>
+                          {speed.label}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
 
               <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
