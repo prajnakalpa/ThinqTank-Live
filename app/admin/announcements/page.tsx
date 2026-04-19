@@ -39,7 +39,7 @@ export default function AnnouncementsAdminPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
+      <div className="admin-page-header">
         <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.8rem', color: '#f1f5f9' }}>Announcements</h1>
         <button onClick={() => setEditing(blank())} className="btn-primary" style={{ padding: '9px 20px', fontSize: '0.875rem' }}>+ New</button>
       </div>
@@ -63,11 +63,11 @@ export default function AnnouncementsAdminPage() {
       </div>
 
       {editing && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', overflowY: 'auto' }}>
           <div style={{ background: '#0f172a', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 20, padding: '1.75rem', width: '100%', maxWidth: 500 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: '#f1f5f9', fontSize: '1.2rem' }}>{(editing as any).id ? 'Edit' : 'New'} Announcement</h2>
-              <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1 }}>×</button>
+              <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1, minHeight: 44, minWidth: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
@@ -78,10 +78,10 @@ export default function AnnouncementsAdminPage() {
                 <label style={{ display: 'block', color: '#64748b', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Body</label>
                 <textarea value={editing.body} onChange={e => F('body', e.target.value)} className="input-field" rows={5} style={{ resize: 'none' }} />
               </div>
-              <div style={{ display: 'flex', gap: 20 }}>
+              <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
                 {[{ label: 'Pin to top', key: 'is_pinned' }, { label: 'Published', key: 'published' }].map(({ label, key }) => (
-                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: '#94a3b8', fontSize: '0.875rem' }}>
-                    <input type="checkbox" checked={(editing as any)[key]} onChange={e => F(key, e.target.checked)} style={{ accentColor: '#6366f1' }} />
+                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: '#94a3b8', fontSize: '0.875rem', minHeight: 44 }}>
+                    <input type="checkbox" checked={(editing as any)[key]} onChange={e => F(key, e.target.checked)} style={{ accentColor: '#6366f1', width: 16, height: 16 }} />
                     {label}
                   </label>
                 ))}
