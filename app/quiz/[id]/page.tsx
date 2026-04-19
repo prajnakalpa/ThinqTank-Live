@@ -446,10 +446,12 @@ export default function QuizPage({ params }: Props) {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                           {/* Status badge */}
-                          <span style={{
-                            fontSize: '1rem',
-                            title: notAnswered ? 'Not answered' : isCorrect ? 'Correct' : 'Incorrect',
-                          }}>
+                          <span
+  title={notAnswered ? 'Not answered' : isCorrect ? 'Correct' : 'Incorrect'}
+  style={{
+    fontSize: '1rem',
+  }}
+>
                             {notAnswered ? '⚪' : isCorrect ? '✅' : '❌'}
                           </span>
                           {/* Time spent */}
