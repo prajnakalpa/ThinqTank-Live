@@ -32,22 +32,81 @@ export default function QuizPage({ params }: Props) {
   const quizRef        = useRef<any>(null)
   const submittingRef  = useRef(false)
 
-  useEffect(() => { answersRef.current   = answers    }, [answers])
+  useEffect(() => { answersRef.current    = answers    }, [answers])
   useEffect(() => { submissionRef.current = submission }, [submission])
-  useEffect(() => { quizRef.current      = quiz       }, [quiz])
+  useEffect(() => { quizRef.current       = quiz       }, [quiz])
+
+  // ── TIME-PER-QUESTION TRACKING REFS ───────────────────────────────────
+  // timeMapRef:         { [questionId]: seconds_spent }
+  // lastSwitchTimeRef:  ms timestamp of when we arrived on the current question
+  // currentQRef:        index of the question we were PREVIOUSLY on
+  //                     (updated AFTER accumulating, so it lags currentQ by 1 cycle)
+  // questionsRef:       ref-safe mirror of questions[] for use inside timer/auto-submit
+  const timeMapRef        = useRef<Record<string, number>>({})
+  const lastSwitchTimeRef = useRef<number>(Date.now())
+  const currentQRef       = useRef<number>(0)
+  const questionsRef      = useRef<any[]>([])
+
+  useEffect(() => { questionsRef.current = questions }, [questions])
+
+  // Reset tracking baseline when the quiz becomes active so Q1's time
+  // doesn't include the loading / username-setup period.
+  useEffect(() => {
+    if (state === 'quiz') {
+      lastSwitchTimeRef.current = Date.now()
+      currentQRef.current = 0
+    }
+  }, [state])
+
+  // ── Accumulate time on every question change ───────────────────────────
+  // Strategy: currentQRef still holds the OLD index when this effect fires.
+  // We record elapsed time for that old question, then advance currentQRef.
+  useEffect(() => {
+    if (state !== 'quiz' || questionsRef.current.length === 0) return
+
+    const now = Date.now()
+    const prevQ = questionsRef.current[currentQRef.current]
+
+    if (prevQ?.id) {
+      const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+      if (delta > 0) {
+        timeMapRef.current[prevQ.id] = (timeMapRef.current[prevQ.id] || 0) + delta
+      }
+    }
+
+    // Advance to new position and reset the stopwatch
+    currentQRef.current = currentQ
+    lastSwitchTimeRef.current = now
+  }, [currentQ]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-submit ────────────────────────────────────────────────────────
   const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
     if (submittingRef.current) return
     submittingRef.current = true
+
+    // Capture final question time before touching anything else
+    const now = Date.now()
+    const currentId = questionsRef.current[currentQRef.current]?.id
+    if (currentId) {
+      const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+      if (delta > 0) {
+        timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
+      }
+    }
+
+    const timePerQuestion = { ...timeMapRef.current }
+
     await supabase.from('submissions').update({
-      answers: currentAnswers, is_complete: true,
+      answers: currentAnswers,
+      is_complete: true,
       submission_time: new Date().toISOString(),
       time_taken_seconds: duration,
+      time_per_question: timePerQuestion,
     }).eq('id', subId)
+
     await fetch('/api/quiz/submit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ submissionId: subId }),
+      body: JSON.stringify({ submissionId: subId, time_per_question: timePerQuestion }),
     })
     setState('submitted')
   }
@@ -113,7 +172,6 @@ export default function QuizPage({ params }: Props) {
   }, [state, submission])
 
   // ── ✅ SILENT SENTINEL — DO NOT MOVE OR REFACTOR ─────────────────────
-  // Anti-cheat event listeners. submissionRef + answersRef must remain in parent scope.
   useEffect(() => {
     if (state !== 'quiz' || !submissionRef.current?.id) return
 
@@ -130,49 +188,28 @@ export default function QuizPage({ params }: Props) {
       } catch { /* safe — non-critical */ }
     }
 
-    const handleVisibilityChange = () => {
-  if (document.hidden) logViolation('TAB_SWITCH')
-}
+    const handleVisibilityChange = () => { if (document.hidden) logViolation('TAB_SWITCH') }
+    const handleBlur = () => { logViolation('WINDOW_BLUR') }
+    const handleFocus = () => { logViolation('WINDOW_FOCUS') }
+    const handleCopy = () => { logViolation('COPY') }
+    const handlePaste = () => { logViolation('PASTE') }
+    const handleContextMenu = (e: MouseEvent) => { e.preventDefault(); logViolation('RIGHT_CLICK') }
 
-const handleBlur = () => {
-  logViolation('WINDOW_BLUR')
-}
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleBlur)
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('copy', handleCopy)
+    document.addEventListener('paste', handlePaste)
+    document.addEventListener('contextmenu', handleContextMenu)
 
-// NEW
-const handleFocus = () => {
-  logViolation('WINDOW_FOCUS')
-}
-
-const handleCopy = () => {
-  logViolation('COPY')
-}
-
-const handlePaste = () => {
-  logViolation('PASTE')
-}
-
-const handleContextMenu = (e: MouseEvent) => {
-  e.preventDefault()
-  logViolation('RIGHT_CLICK')
-}
-
-document.addEventListener('visibilitychange', handleVisibilityChange)
-window.addEventListener('blur', handleBlur)
-window.addEventListener('focus', handleFocus)
-
-document.addEventListener('copy', handleCopy)
-document.addEventListener('paste', handlePaste)
-document.addEventListener('contextmenu', handleContextMenu)
-
-return () => {
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
-  window.removeEventListener('blur', handleBlur)
-  window.removeEventListener('focus', handleFocus)
-
-  document.removeEventListener('copy', handleCopy)
-  document.removeEventListener('paste', handlePaste)
-  document.removeEventListener('contextmenu', handleContextMenu)
-}
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleBlur)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('copy', handleCopy)
+      document.removeEventListener('paste', handlePaste)
+      document.removeEventListener('contextmenu', handleContextMenu)
+    }
   }, [state])
   // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
@@ -181,15 +218,40 @@ return () => {
     if (submittingRef.current) return
     submittingRef.current = true
     setSaving(true)
-    const timeTaken = Math.floor((Date.now() - new Date(submission.start_time).getTime()) / 1000)
+
+    // ── CAPTURE FINAL QUESTION TIME — MUST BE FIRST ──────────────────────
+    const now = Date.now()
+    const currentId = questions[currentQ]?.id
+    if (currentId) {
+      const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+      if (delta > 0) {
+        timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
+      }
+    }
+
+    // Snapshot so subsequent async ops see a stable map
+    const timePerQuestion = { ...timeMapRef.current }
+
+    // ── TIME CONSISTENCY CHECK (soft — never breaks flow) ─────────────────
+    const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
+    const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
+    if (Math.abs(timeTaken - sumPerQ) > 30) {
+      console.info('[analytics] time_taken vs sum(time_per_question) mismatch', {
+        timeTaken, sumPerQ, diff: Math.abs(timeTaken - sumPerQ),
+      })
+    }
+
     await supabase.from('submissions').update({
-      answers: answersRef.current, is_complete: true,
+      answers: answersRef.current,
+      is_complete: true,
       submission_time: new Date().toISOString(),
       time_taken_seconds: timeTaken,
+      time_per_question: timePerQuestion,
     }).eq('id', submission.id)
+
     await fetch('/api/quiz/submit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ submissionId: submission.id }),
+      body: JSON.stringify({ submissionId: submission.id, time_per_question: timePerQuestion }),
     })
     setState('submitted')
   }
@@ -219,11 +281,7 @@ return () => {
   if (state === 'loading') return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ textAlign: 'center' }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: '50%', margin: '0 auto 16px',
-          border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1',
-          animation: 'spin 0.8s linear infinite',
-        }} />
+        <div style={{ width: 40, height: 40, borderRadius: '50%', margin: '0 auto 16px', border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1', animation: 'spin 0.8s linear infinite' }} />
         <p style={{ color: '#475569', fontSize: '0.875rem' }}>Loading quiz…</p>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
@@ -232,26 +290,11 @@ return () => {
 
   if (state === 'submitted') return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
-      <div style={{
-        maxWidth: 440, width: '100%', textAlign: 'center',
-        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
-        borderRadius: 20, padding: '2.5rem',
-      }}>
+      <div style={{ maxWidth: 440, width: '100%', textAlign: 'center', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 20, padding: '2.5rem' }}>
         <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
-        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#f1f5f9', marginBottom: 8 }}>
-          Quiz Submitted!
-        </h1>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.5rem', color: '#f1f5f9', marginBottom: 8 }}>Quiz Submitted!</h1>
         <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>Your responses have been recorded. Good luck!</p>
-        <button
-          onClick={() => router.push('/')}
-          style={{
-            padding: '10px 28px', borderRadius: 10,
-            background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-            border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer',
-          }}
-        >
-          Back to Home
-        </button>
+        <button onClick={() => router.push('/')} style={{ padding: '10px 28px', borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>Back to Home</button>
       </div>
     </div>
   )
@@ -279,376 +322,101 @@ return () => {
 
   if (state === 'username') return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
-      <div style={{
-        maxWidth: 440, width: '100%',
-        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)',
-        borderRadius: 20, padding: '2rem',
-      }}>
+      <div style={{ maxWidth: 440, width: '100%', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 20, padding: '2rem' }}>
         <div style={{ height: 2, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', borderRadius: 99, marginBottom: '1.5rem' }} />
-        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.3rem', color: '#f1f5f9', marginBottom: 6 }}>
-          Choose your username
-        </h1>
-        <p style={{ color: '#64748b', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
-          Displayed on the leaderboard. <strong style={{ color: '#e2e8f0' }}>Cannot be changed later.</strong>
-        </p>
-        <input
-          placeholder="e.g. coolplayer42"
-          value={newUsername}
-          onChange={e => setNewUsername(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSetUsername()}
-          maxLength={20}
-          autoFocus
-          style={{
-            width: '100%', background: 'rgba(15,23,42,0.8)',
-            border: '1px solid rgba(148,163,184,0.12)', borderRadius: 10,
-            padding: '11px 14px', color: '#f1f5f9', fontSize: '0.95rem',
-            outline: 'none', marginBottom: 10,
-          }}
-        />
-        {usernameError && (
-          <p style={{ color: '#f87171', fontSize: '0.82rem', marginBottom: 10 }}>{usernameError}</p>
-        )}
-        <button
-          onClick={handleSetUsername}
-          disabled={newUsername.trim().length < 3}
-          style={{
-            width: '100%', padding: '11px', borderRadius: 10,
-            background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-            border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem',
-            cursor: newUsername.trim().length < 3 ? 'not-allowed' : 'pointer',
-            opacity: newUsername.trim().length < 3 ? 0.5 : 1,
-            minHeight: 44,
-          }}
-        >
-          Confirm & Start Quiz →
-        </button>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.3rem', color: '#f1f5f9', marginBottom: 6 }}>Choose your username</h1>
+        <p style={{ color: '#64748b', fontSize: '0.875rem', marginBottom: '1.25rem' }}>Displayed on the leaderboard. <strong style={{ color: '#e2e8f0' }}>Cannot be changed later.</strong></p>
+        <input placeholder="e.g. coolplayer42" value={newUsername} onChange={e => setNewUsername(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSetUsername()} maxLength={20} autoFocus style={{ width: '100%', background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(148,163,184,0.12)', borderRadius: 10, padding: '11px 14px', color: '#f1f5f9', fontSize: '0.95rem', outline: 'none', marginBottom: 10 }} />
+        {usernameError && <p style={{ color: '#f87171', fontSize: '0.82rem', marginBottom: 10 }}>{usernameError}</p>}
+        <button onClick={handleSetUsername} disabled={newUsername.trim().length < 3} style={{ width: '100%', padding: '11px', borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', border: 'none', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: newUsername.trim().length < 3 ? 'not-allowed' : 'pointer', opacity: newUsername.trim().length < 3 ? 0.5 : 1, minHeight: 44 }}>Confirm & Start Quiz →</button>
       </div>
     </div>
   )
 
   // ── Main quiz UI ───────────────────────────────────────────────────────
-
-  // True if the current question is MCQ
   const qIsMcq = q?.type?.includes('mcq') ?? false
-  // Safely parse options array
   const qOptions: string[] = Array.isArray(q?.options) ? q.options : []
 
   return (
     <div style={{ minHeight: '100vh', background: '#020617', color: '#f1f5f9' }}>
 
       {/* ── STICKY HEADER BAR ── */}
-      <div style={{
-        position: 'sticky', top: 0, zIndex: 20,
-        background: 'rgba(2,6,23,0.92)', backdropFilter: 'blur(20px)',
-        borderBottom: '1px solid rgba(148,163,184,0.08)',
-        padding: '0 1rem',
-      }}>
+      <div style={{ position: 'sticky', top: 0, zIndex: 20, background: 'rgba(2,6,23,0.92)', backdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(148,163,184,0.08)', padding: '0 1rem' }}>
         <div style={{ maxWidth: 720, margin: '0 auto', height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-
-          {/* Quiz name */}
           <div style={{ minWidth: 0, flex: 1 }}>
-            <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {activity?.title}
-            </p>
-            <p style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: 1 }}>
-              Q{currentQ + 1}/{questions.length} · {answered} answered
-            </p>
+            <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activity?.title}</p>
+            <p style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: 1 }}>Q{currentQ + 1}/{questions.length} · {answered} answered</p>
           </div>
-
-          {/* Timer */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '5px 10px', borderRadius: 10,
-            background: urgent ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.1)',
-            border: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.2)'}`,
-            transition: 'all 0.5s',
-            flexShrink: 0,
-          }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 10, background: urgent ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.1)', border: `1px solid ${urgent ? 'rgba(239,68,68,0.25)' : 'rgba(99,102,241,0.2)'}`, transition: 'all 0.5s', flexShrink: 0 }}>
             <span style={{ fontSize: '0.85rem' }}>⏱</span>
-            <span style={{
-              fontFamily: 'monospace', fontWeight: 700, fontSize: '0.95rem',
-              color: urgent ? '#f87171' : '#818cf8',
-              animation: urgent ? 'timerPulse 1s ease-in-out infinite' : 'none',
-            }}>
-              {mins}:{secs}
-            </span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.95rem', color: urgent ? '#f87171' : '#818cf8', animation: urgent ? 'timerPulse 1s ease-in-out infinite' : 'none' }}>{mins}:{secs}</span>
           </div>
-
-          {/* Progress fraction */}
-          <span style={{ color: '#334155', fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>
-            {currentQ + 1}/{questions.length}
-          </span>
+          <span style={{ color: '#334155', fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>{currentQ + 1}/{questions.length}</span>
         </div>
-
-        {/* Progress bar */}
         <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', margin: '0 1rem' }}>
-          <div style={{
-            height: '100%',
-            background: urgent
-              ? 'linear-gradient(90deg,#ef4444,#f87171)'
-              : 'linear-gradient(90deg,#6366f1,#8b5cf6)',
-            width: `${((currentQ + 1) / Math.max(questions.length, 1)) * 100}%`,
-            transition: 'width 0.3s ease, background 0.5s',
-            borderRadius: 99,
-          }} />
+          <div style={{ height: '100%', background: urgent ? 'linear-gradient(90deg,#ef4444,#f87171)' : 'linear-gradient(90deg,#6366f1,#8b5cf6)', width: `${((currentQ + 1) / Math.max(questions.length, 1)) * 100}%`, transition: 'width 0.3s ease, background 0.5s', borderRadius: 99 }} />
         </div>
       </div>
 
       {/* ── QUESTION CONTENT ── */}
       <div style={{ maxWidth: 720, margin: '0 auto', padding: '1.5rem 1rem 6rem' }}>
-
         {q ? (
           <>
-            {/* Question card */}
-            <div style={{
-              background: 'rgba(15,23,42,0.8)',
-              border: '1px solid rgba(148,163,184,0.1)',
-              borderRadius: 16, padding: '1.25rem',
-              marginBottom: '1.25rem',
-              boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
-            }}>
-              {/* Q badge + pts */}
+            <div style={{ background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(148,163,184,0.1)', borderRadius: 16, padding: '1.25rem', marginBottom: '1.25rem', boxShadow: '0 4px 24px rgba(0,0,0,0.3)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.875rem' }}>
-                <span style={{
-                  background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)',
-                  color: '#818cf8', borderRadius: 7, padding: '3px 9px',
-                  fontSize: '0.72rem', fontWeight: 700,
-                }}>
-                  Q{currentQ + 1}
-                </span>
-                {q.weightage > 1 && (
-                  <span style={{ color: '#f59e0b', fontSize: '0.72rem', fontWeight: 600 }}>
-                    {q.weightage} pts
-                  </span>
-                )}
-                {qIsMcq && (
-                  <span style={{
-                    background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)',
-                    color: '#a78bfa', borderRadius: 5, padding: '2px 7px',
-                    fontSize: '0.68rem', fontWeight: 700,
-                  }}>
-                    MCQ
-                  </span>
-                )}
+                <span style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', borderRadius: 7, padding: '3px 9px', fontSize: '0.72rem', fontWeight: 700 }}>Q{currentQ + 1}</span>
+                {q.weightage > 1 && <span style={{ color: '#f59e0b', fontSize: '0.72rem', fontWeight: 600 }}>{q.weightage} pts</span>}
+                {qIsMcq && <span style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#a78bfa', borderRadius: 5, padding: '2px 7px', fontSize: '0.68rem', fontWeight: 700 }}>MCQ</span>}
               </div>
-
-              {/* ── Image (if present) — rendered ABOVE question text ── */}
-              {q.image_url && (
-                <img
-                  src={q.image_url}
-                  alt="Question image"
-                  style={{
-                    width: '100%',
-                    height: 'auto',
-                    borderRadius: 10,
-                    marginBottom: '1rem',
-                    display: 'block',
-                    maxHeight: 360,
-                    objectFit: 'contain',
-                  }}
-                />
-              )}
-
-              {/* Question text */}
-              <p style={{
-                fontSize: '1rem', lineHeight: 1.7,
-                color: '#e2e8f0', fontWeight: 400,
-                marginBottom: '1.25rem',
-              }}>
-                {q.text}
-              </p>
-
-              {/* ── ANSWER INPUT — conditional on type ── */}
+              {q.image_url && <img src={q.image_url} alt="Question image" style={{ width: '100%', height: 'auto', borderRadius: 10, marginBottom: '1rem', display: 'block', maxHeight: 360, objectFit: 'contain' }} />}
+              <p style={{ fontSize: '1rem', lineHeight: 1.7, color: '#e2e8f0', fontWeight: 400, marginBottom: '1.25rem' }}>{q.text}</p>
               {qIsMcq ? (
-                // ── MCQ: selectable option buttons ──
-                // Answers stored as STRING index: '0', '1', '2', …
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {qOptions.map((opt: string, idx: number) => {
-                    const idxStr  = String(idx)
+                    const idxStr = String(idx)
                     const selected = answers[q.id] === idxStr
                     return (
-                      <button
-                        key={idx}
-                        onClick={() => setAnswers(prev => ({ ...prev, [q.id]: idxStr }))}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 12,
-                          padding: '12px 14px', borderRadius: 10,
-                          background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)',
-                          border: selected
-                            ? '1.5px solid rgba(99,102,241,0.55)'
-                            : '1.5px solid rgba(148,163,184,0.1)',
-                          color: selected ? '#e2e8f0' : '#94a3b8',
-                          fontSize: '0.95rem', textAlign: 'left',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s',
-                          width: '100%',
-                        }}
-                      >
-                        {/* Option letter indicator */}
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
-                          background: selected ? '#6366f1' : 'rgba(148,163,184,0.1)',
-                          color: selected ? '#fff' : '#64748b',
-                          fontSize: '0.75rem', fontWeight: 700,
-                          transition: 'all 0.15s',
-                        }}>
-                          {String.fromCharCode(65 + idx)}
-                        </span>
+                      <button key={idx} onClick={() => setAnswers(prev => ({ ...prev, [q.id]: idxStr }))} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 10, background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)', border: selected ? '1.5px solid rgba(99,102,241,0.55)' : '1.5px solid rgba(148,163,184,0.1)', color: selected ? '#e2e8f0' : '#94a3b8', fontSize: '0.95rem', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s', width: '100%' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: '50%', flexShrink: 0, background: selected ? '#6366f1' : 'rgba(148,163,184,0.1)', color: selected ? '#fff' : '#64748b', fontSize: '0.75rem', fontWeight: 700, transition: 'all 0.15s' }}>{String.fromCharCode(65 + idx)}</span>
                         {opt}
                       </button>
                     )
                   })}
-                  {qOptions.length === 0 && (
-                    <p style={{ color: '#475569', fontSize: '0.85rem', fontStyle: 'italic' }}>
-                      No options configured for this question.
-                    </p>
-                  )}
+                  {qOptions.length === 0 && <p style={{ color: '#475569', fontSize: '0.85rem', fontStyle: 'italic' }}>No options configured for this question.</p>}
                 </div>
               ) : (
-                // ── Objective: text textarea (unchanged) ──
-                <textarea
-                  value={answers[q.id] || ''}
-                  onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-                  placeholder="Type your answer here…"
-                  rows={4}
-                  style={{
-                    width: '100%', resize: 'vertical',
-                    background: 'rgba(2,6,23,0.7)',
-                    border: '1.5px solid rgba(148,163,184,0.1)',
-                    borderRadius: 12, padding: '12px 14px',
-                    color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6,
-                    outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s',
-                    fontFamily: 'inherit',
-                  }}
-                  onFocus={e => {
-                    e.target.style.borderColor = 'rgba(99,102,241,0.55)'
-                    e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)'
-                  }}
-                  onBlur={e => {
-                    e.target.style.borderColor = 'rgba(148,163,184,0.1)'
-                    e.target.style.boxShadow = 'none'
-                  }}
-                />
+                <textarea value={answers[q.id] || ''} onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))} placeholder="Type your answer here…" rows={4} style={{ width: '100%', resize: 'vertical', background: 'rgba(2,6,23,0.7)', border: '1.5px solid rgba(148,163,184,0.1)', borderRadius: 12, padding: '12px 14px', color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6, outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s', fontFamily: 'inherit' }} onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.55)'; e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)' }} onBlur={e => { e.target.style.borderColor = 'rgba(148,163,184,0.1)'; e.target.style.boxShadow = 'none' }} />
               )}
             </div>
 
-            {/* Navigation */}
             <div className="quiz-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-
-              <button
-                disabled={currentQ === 0}
-                onClick={() => setCurrentQ(p => p - 1)}
-                style={{
-                  padding: '10px 16px', borderRadius: 10,
-                  background: 'transparent',
-                  border: '1px solid rgba(148,163,184,0.12)',
-                  color: currentQ === 0 ? '#1e293b' : '#94a3b8',
-                  cursor: currentQ === 0 ? 'default' : 'pointer',
-                  fontSize: '0.875rem', fontWeight: 600,
-                  transition: 'all 0.15s', minHeight: 44,
-                  flexShrink: 0,
-                }}
-              >
-                ← Prev
-              </button>
-
-              {/* Question dot navigator */}
+              <button disabled={currentQ === 0} onClick={() => setCurrentQ(p => p - 1)} style={{ padding: '10px 16px', borderRadius: 10, background: 'transparent', border: '1px solid rgba(148,163,184,0.12)', color: currentQ === 0 ? '#1e293b' : '#94a3b8', cursor: currentQ === 0 ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600, transition: 'all 0.15s', minHeight: 44, flexShrink: 0 }}>← Prev</button>
               <div className="quiz-nav-dots" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
                 {questions.map((_, i) => {
                   const isAnswered = !!answers[questions[i].id]
-                  const isCurrent  = i === currentQ
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => setCurrentQ(i)}
-                      title={`Q${i + 1}`}
-                      style={{
-                        width: 30, height: 30, borderRadius: 8,
-                        border: 'none', cursor: 'pointer',
-                        fontSize: '0.7rem', fontWeight: 700,
-                        background: isCurrent
-                          ? '#6366f1'
-                          : isAnswered
-                            ? 'rgba(34,197,94,0.2)'
-                            : 'rgba(255,255,255,0.05)',
-                        color: isCurrent ? '#fff' : isAnswered ? '#4ade80' : '#475569',
-                        outline: isCurrent ? '2px solid rgba(99,102,241,0.4)' : 'none',
-                        outlineOffset: 2,
-                        transition: 'all 0.15s',
-                        minHeight: 30,
-                      }}
-                    >
-                      {i + 1}
-                    </button>
-                  )
+                  const isCurrent = i === currentQ
+                  return <button key={i} onClick={() => setCurrentQ(i)} title={`Q${i + 1}`} style={{ width: 30, height: 30, borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 700, background: isCurrent ? '#6366f1' : isAnswered ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.05)', color: isCurrent ? '#fff' : isAnswered ? '#4ade80' : '#475569', outline: isCurrent ? '2px solid rgba(99,102,241,0.4)' : 'none', outlineOffset: 2, transition: 'all 0.15s', minHeight: 30 }}>{i + 1}</button>
                 })}
               </div>
-
               {currentQ < questions.length - 1 ? (
-                <button
-                  onClick={() => setCurrentQ(p => p + 1)}
-                  style={{
-                    padding: '10px 16px', borderRadius: 10,
-                    background: 'rgba(99,102,241,0.15)',
-                    border: '1px solid rgba(99,102,241,0.25)',
-                    color: '#818cf8', cursor: 'pointer',
-                    fontSize: '0.875rem', fontWeight: 700,
-                    transition: 'all 0.15s', minHeight: 44,
-                    flexShrink: 0,
-                  }}
-                >
-                  Next →
-                </button>
+                <button onClick={() => setCurrentQ(p => p + 1)} style={{ padding: '10px 16px', borderRadius: 10, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 700, transition: 'all 0.15s', minHeight: 44, flexShrink: 0 }}>Next →</button>
               ) : (
-                <button
-                  onClick={handleSubmit}
-                  disabled={saving}
-                  style={{
-                    padding: '10px 18px', borderRadius: 10,
-                    background: saving ? 'rgba(34,197,94,0.4)' : 'linear-gradient(135deg,#22c55e,#16a34a)',
-                    border: 'none', color: '#fff',
-                    cursor: saving ? 'not-allowed' : 'pointer',
-                    fontSize: '0.875rem', fontWeight: 700,
-                    boxShadow: '0 4px 16px rgba(34,197,94,0.25)',
-                    transition: 'all 0.15s', minHeight: 44,
-                    opacity: saving ? 0.7 : 1,
-                    flexShrink: 0,
-                  }}
-                >
-                  {saving ? 'Submitting…' : '✓ Submit'}
-                </button>
+                <button onClick={handleSubmit} disabled={saving} style={{ padding: '10px 18px', borderRadius: 10, background: saving ? 'rgba(34,197,94,0.4)' : 'linear-gradient(135deg,#22c55e,#16a34a)', border: 'none', color: '#fff', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 700, boxShadow: '0 4px 16px rgba(34,197,94,0.25)', transition: 'all 0.15s', minHeight: 44, opacity: saving ? 0.7 : 1, flexShrink: 0 }}>{saving ? 'Submitting…' : '✓ Submit'}</button>
               )}
             </div>
-
-            {/* Answered count */}
-            <p style={{ textAlign: 'center', color: '#334155', fontSize: '0.72rem', marginTop: '1rem' }}>
-              {answered} of {questions.length} answered
-            </p>
+            <p style={{ textAlign: 'center', color: '#334155', fontSize: '0.72rem', marginTop: '1rem' }}>{answered} of {questions.length} answered</p>
           </>
         ) : (
           <p style={{ color: '#475569', textAlign: 'center', paddingTop: '4rem' }}>No questions found.</p>
         )}
       </div>
 
-      {/* ── Animations + responsive nav fix ── */}
       <style>{`
-        @keyframes timerPulse {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.6; }
-        }
+        @keyframes timerPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
         @keyframes spin { to { transform: rotate(360deg); } }
-
         @media (max-width: 540px) {
-          .quiz-nav {
-            flex-wrap: wrap;
-            gap: 10px;
-          }
-          .quiz-nav-dots {
-            flex-basis: 100%;
-            order: -1;
-            flex: none;
-          }
+          .quiz-nav { flex-wrap: wrap; gap: 10px; }
+          .quiz-nav-dots { flex-basis: 100%; order: -1; flex: none; }
         }
       `}</style>
     </div>
