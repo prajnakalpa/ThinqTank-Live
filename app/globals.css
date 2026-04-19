@@ -180,3 +180,208 @@ body {
 .footer-link:hover {
   color: #94a3b8;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMIN LAYOUT — CSS-class-driven sidebar system
+   ─────────────────────────────────────────────────────────────────────────
+   Position is 100% CSS-driven; JS only toggles --open / --visible classes.
+   This prevents SSR/hydration mismatch: inline styles baked at `left:0`
+   cannot be overridden by CSS media queries, which was the original bug.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.admin-shell {
+  min-height: 100vh;
+  background: #020617;
+  overflow-x: hidden;
+}
+
+/* Sidebar: default VISIBLE on desktop */
+.admin-sidebar {
+  width: 230px;
+  background: rgba(10, 14, 28, 0.98);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid rgba(148, 163, 184, 0.07);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 95;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.admin-sidebar a:hover {
+  background: rgba(99, 102, 241, 0.1);
+  color: #e2e8f0;
+}
+
+/* Backdrop: hidden until --visible */
+.admin-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 90;
+}
+.admin-backdrop--visible {
+  display: block;
+}
+
+/* Mobile top bar: hidden on desktop */
+.admin-topbar {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 52px;
+  background: rgba(2, 6, 23, 0.95);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 100;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+}
+
+/* Main content area */
+.admin-main {
+  margin-left: 230px;
+  min-height: 100vh;
+  padding: 2rem 2.5rem;
+  overflow-x: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* ── MOBILE (≤ 768px) ─────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Show mobile top bar */
+  .admin-topbar {
+    display: flex;
+  }
+
+  /* Sidebar hidden off-screen by default — NO inline style involved */
+  .admin-sidebar {
+    left: -260px;
+    box-shadow: none;
+  }
+
+  /* Sidebar slides in when JS adds --open class */
+  .admin-sidebar--open {
+    left: 0;
+    box-shadow: 8px 0 40px rgba(0, 0, 0, 0.6);
+  }
+
+  /* Content: full width, no left margin, clear of top bar */
+  .admin-main {
+    margin-left: 0;
+    padding: 72px 1rem 2rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL MOBILE FIXES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Minimum 44px touch targets */
+button {
+  min-height: 44px;
+}
+
+/* Safe full-bleed containers */
+.full-width-safe {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Responsive 2-column grid → collapses to 1 col on small screens */
+.admin-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 540px) {
+  .admin-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Modal 2-col grid → collapses earlier */
+.modal-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 420px) {
+  .modal-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Page header row — title + CTA button, wraps cleanly on mobile */
+.admin-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 2rem;
+}
+
+/* Scrollable table container — prevents horizontal blowout on mobile */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+.table-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 560px;
+}
+
+/* Leaderboard: 3-col podium, tightens on small screens */
+.podium-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  max-width: 560px;
+  margin: 0 auto 2rem;
+}
+@media (max-width: 400px) {
+  .podium-grid {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+  }
+}
+
+/* Submissions answer comparison: 2-col on desktop, 1-col on mobile */
+.ans-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+@media (max-width: 480px) {
+  .ans-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .sub-actions {
+    margin-left: 0 !important;
+    width: 100%;
+  }
+  .sub-row {
+    row-gap: 8px;
+  }
+}
