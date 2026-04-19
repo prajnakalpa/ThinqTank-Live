@@ -162,7 +162,7 @@ export default function QuizPage({ params }: Props) {
       setSubmission(existingSub)
       setAnswers(existingSub.answers ?? {})
       const remaining = getSecondsRemaining(existingSub.start_time, q.duration_minutes * 60)
-      if (remaining <= 0) { doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60); return }
+      if (remaining <= 0) { doAutoSubmit(existingSub.id, answersRef.current, q.duration_minutes * 60); return }
       setTimeLeft(remaining)
     } else {
       const { data: newSub } = await supabase.from('submissions').insert({
@@ -236,44 +236,56 @@ export default function QuizPage({ params }: Props) {
   // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
   // ── Submit ─────────────────────────────────────────────────────────────
-  const handleSubmit = async () => {
-    if (submittingRef.current) return
-    submittingRef.current = true
-    setSaving(true)
-
-    const now = Date.now()
-    const currentId = questions[currentQ]?.id
-    if (currentId) {
-      const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
-      if (delta > 0) {
-        timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
-      }
-    }
-
-    const timePerQuestion = { ...timeMapRef.current }
-
-    const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
-    const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
-    if (Math.abs(timeTaken - sumPerQ) > 30) {
-      console.info('[analytics] time_taken vs sum(time_per_question) mismatch', {
-        timeTaken, sumPerQ, diff: Math.abs(timeTaken - sumPerQ),
-      })
-    }
-
-    await supabase.from('submissions').update({
-      answers: answersRef.current,
-      is_complete: true,
-      submission_time: new Date().toISOString(),
-      time_taken_seconds: timeTaken,
-      time_per_question: timePerQuestion,
-    }).eq('id', submission.id)
-
-    await fetch('/api/quiz/submit', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ submissionId: submission.id, time_per_question: timePerQuestion }),
-    })
-    setState('submitted')
+const handleSubmit = async () => {
+  if (submittingRef.current) {
+    console.log('BLOCKED SUBMIT - already submitting')
+    return
   }
+
+  setSaving(true)
+
+  const now = Date.now()
+  const currentId = questions[currentQ]?.id
+  if (currentId) {
+    const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+    if (delta > 0) {
+      timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
+    }
+  }
+
+  const timePerQuestion = { ...timeMapRef.current }
+
+  const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
+  const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
+
+  if (Math.abs(timeTaken - sumPerQ) > 30) {
+    console.info('[analytics] mismatch', { timeTaken, sumPerQ })
+  }
+
+  // ✅ SAVE ANSWERS FIRST
+  await supabase.from('submissions').update({
+    answers: answersRef.current,
+    is_complete: true,
+    submission_time: new Date().toISOString(),
+    time_taken_seconds: timeTaken,
+    time_per_question: timePerQuestion,
+  }).eq('id', submission.id)
+
+  // ✅ NOW LOCK SUBMIT
+  submittingRef.current = true
+
+  await fetch('/api/quiz/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      submissionId: submission.id,
+      answers: answersRef.current,   // ✅ ADD THIS
+      time_per_question: timePerQuestion
+    }),
+  })
+
+  setState('submitted')
+}
 
   // ── Username ───────────────────────────────────────────────────────────
   const handleSetUsername = async () => {
