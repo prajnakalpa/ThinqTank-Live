@@ -246,7 +246,7 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
 
       {/* Page header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
+      <div className="admin-page-header" style={{ alignItems: 'flex-end' }}>
         <div>
           <p style={{ color: '#6366f1', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
             Admin · Questions
@@ -743,18 +743,6 @@ export default function QuestionsPage({ params }: { params: { quizId: string } }
         )}
       </div>
 
-      <style>{`
-        .modal-grid-2 {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 12px;
-        }
-        @media (max-width: 420px) {
-          .modal-grid-2 {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
     </div>
   )
 }
