@@ -250,7 +250,88 @@ export default function QuizPage({ params }: Props) {
   // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
   // ── Submit ─────────────────────────────────────────────────────────────
-  const handleSubmit = async () => {
+
+const handleSubmit = async () => {
+  if (submittingRef.current) return
+  submittingRef.current = true
+  setSaving(true)
+
+  const now = Date.now()
+  const currentId = questions[currentQ]?.id
+
+  if (currentId) {
+    const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+    if (delta > 0) {
+      timeMapRef.current[currentId] =
+        (timeMapRef.current[currentId] || 0) + delta
+    }
+  }
+
+  const timePerQuestion = { ...timeMapRef.current }
+
+  const timeTaken = Math.floor(
+    (now - new Date(submission.start_time).getTime()) / 1000
+  )
+
+  const finalAnswers = { ...answersRef.current }
+
+  const { data, error } = await supabase
+    .from('submissions')
+    .update({
+      answers: finalAnswers,
+      is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: timeTaken,
+      time_per_question: timePerQuestion,
+    })
+    .eq('id', submission.id)
+    .select()
+
+  if (!data || data.length === 0 || error) {
+    console.error('SUBMISSION FAILED', error)
+    return
+  }
+
+  await fetch('/api/quiz/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      submissionId: submission.id,
+      answers: finalAnswers,
+      time_per_question: timePerQuestion,
+    }),
+  })
+
+  setSubmission((prev: any) => ({
+    ...prev,
+    answers: finalAnswers,
+    time_per_question: timePerQuestion,
+  }))
+
+  setState('submitted')
+}
+  
+  // ── Username ───────────────────────────────────────────────────────────
+  const handleSetUsername = async () => {
+    const trimmed = newUsername.trim()
+    if (trimmed.length < 3) { setUsernameError('At least 3 characters.'); return }
+    setUsernameError('')
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const { error } = await supabase.from('users')
+      .update({ username: trimmed, username_locked: true }).eq('id', user.id)
+    if (error?.code === '23505') { setUsernameError('Username taken. Try another.'); return }
+    loadQuiz()
+  }
+
+  // ── Derived ────────────────────────────────────────────────────────────
+  const urgent   = timeLeft > 0 && timeLeft < 60
+  const answered = Object.values(answers).filter(Boolean).length
+  const q        = questions[currentQ]
+  const mins     = Math.floor(timeLeft / 60)
+  const secs     = (timeLeft % 60).toString().padStart(2, '0')
+
+  // ── State screens ──────────────────────────────────────────const handleSubmit = async () => {
     if (submittingRef.current) return
     // Lock FIRST — before any await — so rapid double-clicks can't both pass the guard
     submittingRef.current = true
@@ -303,28 +384,7 @@ export default function QuizPage({ params }: Props) {
     }))
     setState('submitted')
   }
-
-  // ── Username ───────────────────────────────────────────────────────────
-  const handleSetUsername = async () => {
-    const trimmed = newUsername.trim()
-    if (trimmed.length < 3) { setUsernameError('At least 3 characters.'); return }
-    setUsernameError('')
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-    const { error } = await supabase.from('users')
-      .update({ username: trimmed, username_locked: true }).eq('id', user.id)
-    if (error?.code === '23505') { setUsernameError('Username taken. Try another.'); return }
-    loadQuiz()
-  }
-
-  // ── Derived ────────────────────────────────────────────────────────────
-  const urgent   = timeLeft > 0 && timeLeft < 60
-  const answered = Object.values(answers).filter(Boolean).length
-  const q        = questions[currentQ]
-  const mins     = Math.floor(timeLeft / 60)
-  const secs     = (timeLeft % 60).toString().padStart(2, '0')
-
-  // ── State screens ──────────────────────────────────────────────────────
+────────────
 
   if (state === 'loading') return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
