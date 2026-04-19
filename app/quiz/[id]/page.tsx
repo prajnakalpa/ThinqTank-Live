@@ -64,7 +64,10 @@ export default function QuizPage({ params }: Props) {
   const [usernameError, setUsernameError] = useState('')
 
   const router   = useRouter()
-  const supabase = createClient()
+  // Stable Supabase client — must not be recreated on every render because
+  // a fresh instance mid-flight can lose the auth session for in-progress writes.
+  const supabaseRef = useRef(createClient())
+  const supabase    = supabaseRef.current
 
   // ── Refs (anti-stale-closure + Silent Sentinel scope) ──────────────────
   const timerRef       = useRef<NodeJS.Timeout>()
@@ -109,7 +112,7 @@ export default function QuizPage({ params }: Props) {
   // ── Auto-submit ────────────────────────────────────────────────────────
   const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
     if (submittingRef.current) return
-    submittingRef.current = true
+    submittingRef.current = true  // lock immediately — before any await
     const now = Date.now()
     const currentId = questionsRef.current[currentQRef.current]?.id
     if (currentId) {
@@ -130,6 +133,12 @@ export default function QuizPage({ params }: Props) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ submissionId: subId, time_per_question: timePerQuestion }),
     })
+    // Sync submission state so the breakdown screen has the real answers
+    setSubmission((prev: any) => ({
+      ...prev,
+      answers: currentAnswers,
+      time_per_question: timePerQuestion,
+    }))
     setState('submitted')
   }
 
@@ -162,7 +171,12 @@ export default function QuizPage({ params }: Props) {
       setSubmission(existingSub)
       setAnswers(existingSub.answers ?? {})
       const remaining = getSecondsRemaining(existingSub.start_time, q.duration_minutes * 60)
-      if (remaining <= 0) { doAutoSubmit(existingSub.id, answersRef.current, q.duration_minutes * 60); return }
+      if (remaining <= 0) {
+        // Use existingSub.answers directly — answersRef.current hasn't synced yet
+        // because setAnswers() above is an async state update.
+        doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60)
+        return
+      }
       setTimeLeft(remaining)
     } else {
       const { data: newSub } = await supabase.from('submissions').insert({
@@ -236,56 +250,59 @@ export default function QuizPage({ params }: Props) {
   // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
   // ── Submit ─────────────────────────────────────────────────────────────
-const handleSubmit = async () => {
-  if (submittingRef.current) {
-    console.log('BLOCKED SUBMIT - already submitting')
-    return
-  }
+  const handleSubmit = async () => {
+    if (submittingRef.current) return
+    // Lock FIRST — before any await — so rapid double-clicks can't both pass the guard
+    submittingRef.current = true
+    setSaving(true)
 
-  setSaving(true)
-
-  const now = Date.now()
-  const currentId = questions[currentQ]?.id
-  if (currentId) {
-    const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
-    if (delta > 0) {
-      timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
+    const now = Date.now()
+    const currentId = questions[currentQ]?.id
+    if (currentId) {
+      const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+      if (delta > 0) {
+        timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
+      }
     }
+
+    // Snapshot the map before any async op so mutations can't affect it mid-flight
+    const timePerQuestion = { ...timeMapRef.current }
+    // Snapshot answers for the same reason — and for the breakdown update below
+    const finalAnswers = { ...answersRef.current }
+
+    const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
+    const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
+
+    if (Math.abs(timeTaken - sumPerQ) > 30) {
+      console.info('[analytics] time_taken vs sum(time_per_question) mismatch', { timeTaken, sumPerQ })
+    }
+
+    await supabase.from('submissions').update({
+      answers: finalAnswers,
+      is_complete: true,
+      submission_time: new Date().toISOString(),
+      time_taken_seconds: timeTaken,
+      time_per_question: timePerQuestion,
+    }).eq('id', submission.id)
+
+    await fetch('/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        submissionId: submission.id,
+        time_per_question: timePerQuestion,
+      }),
+    })
+
+    // Update submission state with the live answers so the breakdown screen
+    // reads the correct data (submission was set to the initial DB row on load).
+    setSubmission((prev: any) => ({
+      ...prev,
+      answers: finalAnswers,
+      time_per_question: timePerQuestion,
+    }))
+    setState('submitted')
   }
-
-  const timePerQuestion = { ...timeMapRef.current }
-
-  const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
-  const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
-
-  if (Math.abs(timeTaken - sumPerQ) > 30) {
-    console.info('[analytics] mismatch', { timeTaken, sumPerQ })
-  }
-
-  // ✅ SAVE ANSWERS FIRST
-  await supabase.from('submissions').update({
-    answers: answersRef.current,
-    is_complete: true,
-    submission_time: new Date().toISOString(),
-    time_taken_seconds: timeTaken,
-    time_per_question: timePerQuestion,
-  }).eq('id', submission.id)
-
-  // ✅ NOW LOCK SUBMIT
-  submittingRef.current = true
-
-  await fetch('/api/quiz/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      submissionId: submission.id,
-      answers: answersRef.current,   // ✅ ADD THIS
-      time_per_question: timePerQuestion
-    }),
-  })
-
-  setState('submitted')
-}
 
   // ── Username ───────────────────────────────────────────────────────────
   const handleSetUsername = async () => {
