@@ -100,17 +100,20 @@ export async function POST(req: Request) {
         : clientTimePerQuestion
 
     // ── Update submission record ──────────────────────────────────────────
-  await supabase.from('submissions').update({
-  auto_score: total,
-  final_score: total,
-  is_complete: true,
-  cheat_violations: violations,
-  cheat_flag: cheatFlag,
-
-  // ✅ PRESERVE ANSWERS
-  answers: sub.answers,
-
-}).eq('id', submissionId)
+    // Only update scoring/flag fields. The answers field was already written by
+    // the client before this endpoint was called. Writing sub.answers here would
+    // silently overwrite valid answers with null if the client write failed.
+    await supabase.from('submissions').update({
+      auto_score:       total,
+      final_score:      total,
+      is_complete:      true,
+      cheat_violations: violations,
+      cheat_flag:       cheatFlag,
+      // Persist time_per_question only if it isn't already stored
+      ...(Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
+        ? { time_per_question: storedTimePerQuestion }
+        : {}),
+    }).eq('id', submissionId)
     // ── Rebuild leaderboard (unchanged logic) ─────────────────────────────
     await rebuildLeaderboard(supabase, sub.activity_id)
 
