@@ -273,59 +273,71 @@ export default function QuizPage({ params }: Props) {
 
   // ── Submit ─────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (submittingRef.current) return
-    // Lock FIRST — before any await — so rapid double-clicks can't both pass the guard
-    submittingRef.current = true
-    setSaving(true)
+  if (submittingRef.current) return
+  submittingRef.current = true
+  setSaving(true)
 
-    const now = Date.now()
-    const currentId = questions[currentQ]?.id
-    if (currentId) {
-      const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
-      if (delta > 0) {
-        timeMapRef.current[currentId] = (timeMapRef.current[currentId] || 0) + delta
-      }
+  const now = Date.now()
+
+  const currentId = questions[currentQ]?.id
+  if (currentId) {
+    const delta = Math.floor((now - lastSwitchTimeRef.current) / 1000)
+    if (delta > 0) {
+      timeMapRef.current[currentId] =
+        (timeMapRef.current[currentId] || 0) + delta
     }
-
-    // Snapshot the map before any async op so mutations can't affect it mid-flight
-    const timePerQuestion = { ...timeMapRef.current }
-    // Snapshot answers for the same reason — and for the breakdown update below
-    const finalAnswers = { ...answersRef.current }
-
-    const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
-    const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
-
-    if (Math.abs(timeTaken - sumPerQ) > 30) {
-      console.info('[analytics] time_taken vs sum(time_per_question) mismatch', { timeTaken, sumPerQ })
-    }
-
-    await supabase.from('submissions').update({
-      answers: finalAnswers,
-      is_complete: true,
-      submission_time: new Date().toISOString(),
-      time_taken_seconds: timeTaken,
-      time_per_question: timePerQuestion,
-    }).eq('id', submission.id)
-
-    await fetch('/api/quiz/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        submissionId: submission.id,
-        time_per_question: timePerQuestion,
-      }),
-    })
-
-    // Update submission state with the live answers so the breakdown screen
-    // reads the correct data (submission was set to the initial DB row on load).
-    setSubmission((prev: any) => ({
-      ...prev,
-      answers: finalAnswers,
-      time_per_question: timePerQuestion,
-    }))
-    setState('submitted')
   }
 
+  const timePerQuestion = { ...timeMapRef.current }
+
+  // ✅ ALWAYS TAKE LATEST ANSWERS FROM REF
+  const finalAnswers = { ...answersRef.current }
+
+  const timeTaken = Math.floor(
+    (now - new Date(submission.start_time).getTime()) / 1000
+  )
+
+  const sumPerQ = Object.values(timePerQuestion).reduce(
+    (a: number, b: number) => a + b,
+    0
+  )
+
+  if (Math.abs(timeTaken - sumPerQ) > 30) {
+    console.info('[analytics] mismatch', { timeTaken, sumPerQ })
+  }
+
+  // ✅ SAVE TO DB
+  await supabase.from('submissions').update({
+    answers: finalAnswers,
+    is_complete: true,
+    submission_time: new Date().toISOString(),
+    time_taken_seconds: timeTaken,
+    time_per_question: timePerQuestion,
+  }).eq('id', submission.id)
+
+  // ✅ SEND ANSWERS ALSO TO API (CRITICAL FIX)
+  await fetch('/api/quiz/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      submissionId: submission.id,
+      answers: finalAnswers,
+      time_per_question: timePerQuestion,
+    }),
+  })
+
+  // ✅ UPDATE LOCAL STATE
+  setSubmission((prev: any) => ({
+    ...prev,
+    answers: finalAnswers,
+    time_per_question: timePerQuestion,
+  }))
+
+  setState('submitted')
+}
+
+
+  
   // ── Username ───────────────────────────────────────────────────────────
   const handleSetUsername = async () => {
     const trimmed = newUsername.trim()
