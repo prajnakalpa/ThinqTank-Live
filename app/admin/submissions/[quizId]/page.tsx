@@ -582,7 +582,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                               </div>
 
                               {/* Answer comparison — stacks to 1 col on mobile via .ans-grid */}
-                              <div className="ans-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                              <div className="ans-grid">
 
                                 {/* User's answer */}
                                 <div style={{
@@ -709,21 +709,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
         </div>
       )}
 
-      {/* ── Responsive fixes ── */}
-      <style>{`
-        @media (max-width: 480px) {
-          .ans-grid {
-            grid-template-columns: 1fr !important;
-          }
-          .sub-actions {
-            margin-left: 0 !important;
-            width: 100%;
-          }
-          .sub-row {
-            row-gap: 8px;
-          }
-        }
-      `}</style>
     </div>
   )
 }
