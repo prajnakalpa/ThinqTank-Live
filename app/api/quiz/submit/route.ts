@@ -100,18 +100,17 @@ export async function POST(req: Request) {
         : clientTimePerQuestion
 
     // ── Update submission record ──────────────────────────────────────────
-    await supabase.from('submissions').update({
-      auto_score:    total,
-      final_score:   total,
-      is_complete:   true,
-      cheat_violations: violations,
-      cheat_flag:    cheatFlag,
-      // Persist time_per_question if not already stored by the client update
-      ...(Object.keys(storedTimePerQuestion).length > 0
-        ? { time_per_question: storedTimePerQuestion }
-        : {}),
-    }).eq('id', submissionId)
+  await supabase.from('submissions').update({
+  auto_score: total,
+  final_score: total,
+  is_complete: true,
+  cheat_violations: violations,
+  cheat_flag: cheatFlag,
 
+  // ✅ PRESERVE ANSWERS
+  answers: sub.answers,
+
+}).eq('id', submissionId)
     // ── Rebuild leaderboard (unchanged logic) ─────────────────────────────
     await rebuildLeaderboard(supabase, sub.activity_id)
 
