@@ -59,7 +59,7 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
 
         {/* Top 3 podium for quiz view */}
         {quizId && entries.length >= 3 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: '2rem', maxWidth: 560, margin: '0 auto 2rem' }}>
+          <div className="podium-grid" style={{ marginBottom: '2rem' }}>
             {[1, 0, 2].map(pos => {
               const e = entries[pos]
               if (!e) return null
@@ -102,8 +102,8 @@ function RankTable({ entries, showTime, title }: { entries: any[]; showTime?: bo
   return (
     <div>
       {title && <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, color: '#e2e8f0', marginBottom: 16, fontSize: '1.1rem' }}>{title} Rankings</h2>}
-      <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <div className="table-scroll">
+        <table>
           <thead>
             <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.08)', background: 'rgba(255,255,255,0.02)' }}>
               {['Rank', 'Player', 'Score', ...(showTime ? ['Time'] : [])].map(h => (
@@ -150,8 +150,8 @@ function RankTable({ entries, showTime, title }: { entries: any[]; showTime?: bo
 function OverallTable({ entries }: { entries: [string, { username: string; total: number; quizzes: number }][] }) {
   if (!entries.length) return <EmptyState />
   return (
-    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, overflow: 'hidden' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <div className="table-scroll">
+      <table>
         <thead>
           <tr style={{ borderBottom: '1px solid rgba(148,163,184,0.08)', background: 'rgba(255,255,255,0.02)' }}>
             {['Rank', 'Player', 'Total Score', 'Quizzes'].map(h => (
