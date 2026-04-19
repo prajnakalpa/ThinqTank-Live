@@ -55,9 +55,9 @@ export default function ActivityFormPage({ params }: { params: { id: string } })
 
   return (
     <div style={{ maxWidth: 640 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
+      <div className="admin-page-header">
         <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.8rem', color: '#f1f5f9' }}>{isNew ? 'New Activity' : 'Edit Activity'}</h1>
-        {!isNew && <button onClick={handleDelete} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '0.875rem' }}>Delete</button>}
+        {!isNew && <button onClick={handleDelete} style={{ background: 'none', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', cursor: 'pointer', fontSize: '0.875rem', borderRadius: 8, padding: '8px 16px' }}>Delete</button>}
       </div>
 
       <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(148,163,184,0.08)', borderRadius: 16, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -71,7 +71,7 @@ export default function ActivityFormPage({ params }: { params: { id: string } })
         <Field label="Description">
           <textarea value={form.description} onChange={e => F('description', e.target.value)} className="input-field" rows={3} style={{ resize: 'none' }} />
         </Field>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="admin-grid-2">
           <Field label="Status">
             <select value={form.status} onChange={e => F('status', e.target.value)} className="input-field">
               {['upcoming','live','closed','archived'].map(s => <option key={s} value={s}>{s}</option>)}
@@ -87,7 +87,7 @@ export default function ActivityFormPage({ params }: { params: { id: string } })
         <Field label="Duration (minutes)">
           <input type="number" value={form.duration_minutes} onChange={e => F('duration_minutes', Number(e.target.value))} className="input-field" min={1} max={360} />
         </Field>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="admin-grid-2">
           <Field label="Start Time"><input type="datetime-local" value={form.start_time} onChange={e => F('start_time', e.target.value)} className="input-field" /></Field>
           <Field label="End Time"><input type="datetime-local" value={form.end_time} onChange={e => F('end_time', e.target.value)} className="input-field" /></Field>
         </div>
@@ -99,7 +99,7 @@ export default function ActivityFormPage({ params }: { params: { id: string } })
       </div>
 
       {!isNew && (
-        <div style={{ marginTop: 16, display: 'flex', gap: 10 }}>
+        <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <a href={`/admin/questions/${params.id}`} className="btn-ghost" style={{ textDecoration: 'none', padding: '9px 16px', fontSize: '0.85rem' }}>Manage Questions →</a>
           <a href={`/admin/submissions/${params.id}`} className="btn-ghost" style={{ textDecoration: 'none', padding: '9px 16px', fontSize: '0.85rem' }}>View Submissions →</a>
         </div>
