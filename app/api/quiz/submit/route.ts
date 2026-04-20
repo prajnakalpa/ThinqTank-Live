@@ -46,6 +46,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing submissionId' }, { status: 400 })
     }
 
+    // answers, submission_time, time_taken_seconds are written here via admin client
+    // so they are saved even if the browser-client update was blocked by RLS.
+    const clientAnswers: Record<string, string> =
+      body.answers && typeof body.answers === 'object' ? body.answers : {}
+    const clientSubmissionTime: string =
+      typeof body.submission_time === 'string' ? body.submission_time : new Date().toISOString()
+    const clientTimeTaken: number =
+      typeof body.time_taken_seconds === 'number' ? body.time_taken_seconds : 0
+
     // time_per_question is optional — old clients won't send it
     const clientTimePerQuestion: Record<string, number> =
       body.time_per_question && typeof body.time_per_question === 'object'
@@ -79,7 +88,11 @@ export async function POST(req: Request) {
     }
 
     const questions: any[] = sub.activities?.quizzes?.questions ?? []
-    const { total } = evaluateSubmission(questions, sub.answers ?? {})
+    // Use answers from the request body — they are the freshest snapshot.
+    // sub.answers may be stale or empty if the browser-client write was blocked by RLS.
+    const answersToEvaluate =
+      Object.keys(clientAnswers).length > 0 ? clientAnswers : (sub.answers ?? {})
+    const { total } = evaluateSubmission(questions, answersToEvaluate)
 
     // ── Cheat log count ───────────────────────────────────────────────────
     const { data: logs } = await supabase
@@ -100,13 +113,16 @@ export async function POST(req: Request) {
         : clientTimePerQuestion
 
     // ── Update submission record ──────────────────────────────────────────
-    // Only update scoring/flag fields. The answers field was already written by
-    // the client before this endpoint was called. Writing sub.answers here would
-    // silently overwrite valid answers with null if the client write failed.
+    // All fields are written here via the admin client (bypasses RLS), so this
+    // is the authoritative write regardless of whether the browser-client write
+    // in the page component succeeded or was silently blocked.
     await supabase.from('submissions').update({
+      answers:          answersToEvaluate,
       auto_score:       total,
       final_score:      total,
       is_complete:      true,
+      submission_time:  clientSubmissionTime,
+      time_taken_seconds: clientTimeTaken,
       cheat_violations: violations,
       cheat_flag:       cheatFlag,
       // Persist time_per_question only if it isn't already stored
