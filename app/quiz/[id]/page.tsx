@@ -71,7 +71,17 @@ export default function QuizPage({ params }: Props) {
 
   // ── Refs (anti-stale-closure + Silent Sentinel scope) ──────────────────
   const timerRef       = useRef<NodeJS.Timeout>()
-  const answersRef     = useRef<Record<string, string>>({})
+
+  
+  const updateAnswer = (questionId: string, value: string) => {
+  setAnswers(prev => {
+    const next = { ...prev, [questionId]: value };
+    answersRef.current = next; // Syncs to the cheat sheet
+    return next;
+  });
+};
+
+  
   const submissionRef  = useRef<any>(null)
   const quizRef        = useRef<any>(null)
   const submittingRef  = useRef(false)
