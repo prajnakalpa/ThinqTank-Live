@@ -304,12 +304,15 @@ export default function QuizPage({ params }: Props) {
     await fetch('/api/quiz/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body:
+        
+        JSON.stringify({
         submissionId: submission.id,
-        answers: finalAnswers,
+        answers: answersRef.current, // <--- Change this to answersRef.current
         submission_time: new Date().toISOString(),
         time_taken_seconds: timeTaken,
         time_per_question: timePerQuestion,
+        
       }),
     })
 
