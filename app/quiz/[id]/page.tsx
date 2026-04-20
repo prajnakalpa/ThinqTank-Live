@@ -717,7 +717,11 @@ export default function QuizPage({ params }: Props) {
                     const idxStr = String(idx)
                     const selected = answers[q.id] === idxStr
                     return (
-                      <button key={idx} onClick={() => setAnswers(prev => ({ ...prev, [q.id]: idxStr }))} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 10, background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)', border: selected ? '1.5px solid rgba(99,102,241,0.55)' : '1.5px solid rgba(148,163,184,0.1)', color: selected ? '#e2e8f0' : '#94a3b8', fontSize: '0.95rem', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s', width: '100%' }}>
+                      
+                      <button key={idx} onClick={() => updateAnswer(q.id, idxStr)}
+                                                                 
+                                                                 
+                                                                 )} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 10, background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)', border: selected ? '1.5px solid rgba(99,102,241,0.55)' : '1.5px solid rgba(148,163,184,0.1)', color: selected ? '#e2e8f0' : '#94a3b8', fontSize: '0.95rem', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s', width: '100%' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: '50%', flexShrink: 0, background: selected ? '#6366f1' : 'rgba(148,163,184,0.1)', color: selected ? '#fff' : '#64748b', fontSize: '0.75rem', fontWeight: 700, transition: 'all 0.15s' }}>{String.fromCharCode(65 + idx)}</span>
                         {opt}
                       </button>
@@ -726,7 +730,13 @@ export default function QuizPage({ params }: Props) {
                   {qOptions.length === 0 && <p style={{ color: '#475569', fontSize: '0.85rem', fontStyle: 'italic' }}>No options configured for this question.</p>}
                 </div>
               ) : (
-                <textarea value={answers[q.id] || ''} onChange={e => setAnswers(prev => ({ ...prev, [q.id]: e.target.value }))} placeholder="Type your answer here…" rows={4} style={{ width: '100%', resize: 'vertical', background: 'rgba(2,6,23,0.7)', border: '1.5px solid rgba(148,163,184,0.1)', borderRadius: 12, padding: '12px 14px', color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6, outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s', fontFamily: 'inherit' }} onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.55)'; e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)' }} onBlur={e => { e.target.style.borderColor = 'rgba(148,163,184,0.1)'; e.target.style.boxShadow = 'none' }} />
+                <textarea value={answers[q.id] || ''}
+                  
+                  onChange={e => updateAnswer(q.id, e.target.value)}
+
+                                           
+                                           
+                                           )} placeholder="Type your answer here…" rows={4} style={{ width: '100%', resize: 'vertical', background: 'rgba(2,6,23,0.7)', border: '1.5px solid rgba(148,163,184,0.1)', borderRadius: 12, padding: '12px 14px', color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6, outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s', fontFamily: 'inherit' }} onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.55)'; e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)' }} onBlur={e => { e.target.style.borderColor = 'rgba(148,163,184,0.1)'; e.target.style.boxShadow = 'none' }} />
               )}
             </div>
 
