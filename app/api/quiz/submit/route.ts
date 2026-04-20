@@ -1,35 +1,22 @@
 // app/api/quiz/submit/route.ts
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient as createServerClient } from '@/lib/supabase/server'
 import { evaluateSubmission, evaluateAnswer } from '@/lib/evaluation'
 
 // ── Constants ──────────────────────────────────────────────────────────────
-// Per-question time cap: values above this are treated as outliers (e.g. page
-// left open). Applied before averaging; raw data is stored unchanged.
 const MAX_QUESTION_TIME_SECONDS = 600
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/**
- * Returns true if the answer for an MCQ question is correct.
- * Objective questions use evaluateAnswer from the shared lib.
- */
 function isCorrect(q: any, rawAnswer: string): boolean {
   if (!rawAnswer && rawAnswer !== '0') return false
-
-  // MCQ: answer stored as string index "0", "1", …
   if (q.type?.includes('mcq')) {
     return rawAnswer === String(q.correct_option)
   }
-
-  // Objective: use existing fuzzy evaluator
   return evaluateAnswer(q, rawAnswer) > 0
 }
 
-/**
- * Safely cap and coerce a raw time value.
- * Returns an integer number of seconds, 0 if the input is invalid.
- */
 function safeTime(value: unknown): number {
   const n = Number(value)
   if (!isFinite(n) || n < 0) return 0
@@ -46,41 +33,57 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing submissionId' }, { status: 400 })
     }
 
-    // answers, submission_time, time_taken_seconds are written here via admin client
-    // so they are saved even if the browser-client update was blocked by RLS.
     const clientAnswers: Record<string, string> =
       body.answers && typeof body.answers === 'object' ? body.answers : {}
     const clientSubmissionTime: string =
       typeof body.submission_time === 'string' ? body.submission_time : new Date().toISOString()
     const clientTimeTaken: number =
       typeof body.time_taken_seconds === 'number' ? body.time_taken_seconds : 0
-
-    // time_per_question is optional — old clients won't send it
     const clientTimePerQuestion: Record<string, number> =
       body.time_per_question && typeof body.time_per_question === 'object'
         ? body.time_per_question
         : {}
 
-    const supabase = createAdminClient()
+    // ── Clients ───────────────────────────────────────────────────────────
+    //
+    // userClient — server-side Supabase using NEXT_PUBLIC_SUPABASE_ANON_KEY
+    // plus the user's auth cookie forwarded from this request.
+    // Uses the IDENTICAL project + credentials as the browser client that
+    // created the submission row, so RLS (auth.uid() = user_id) is satisfied
+    // and NO service role key is required.
+    //
+    // adminClient — service-role key, bypasses RLS entirely.
+    // Only used for cross-user reads (all submissions) and writes to
+    // analytics/leaderboard. Isolated in its own try/catch: a missing or
+    // misconfigured SUPABASE_SERVICE_ROLE_KEY degrades analytics gracefully
+    // instead of crashing the entire route.
+    const userClient = createServerClient()
 
-    // ── Fetch submission with full question tree ───────────────────────────
-    const { data: sub, error } = await supabase
+    let adminClient: any = null
+    try {
+      adminClient = createAdminClient()
+    } catch (e) {
+      console.warn('[submit/route] createAdminClient failed — admin ops disabled:', (e as Error).message)
+    }
+
+    // ── Fetch submission + question tree ──────────────────────────────────
+    // userClient has SELECT on the participant's own submission and on
+    // activities/quizzes/questions (same access the quiz page uses).
+    const { data: sub, error } = await userClient
       .from('submissions')
       .select('*, activities(id, quizzes(id, questions(*)))')
       .eq('id', submissionId)
       .single()
 
     if (error || !sub) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      console.error('[submit/route] submission fetch failed:', error?.message)
+      return NextResponse.json({ error: 'Submission not found' }, { status: 404 })
     }
 
     // ── DOUBLE-SUBMIT GUARD ───────────────────────────────────────────────
-    // If is_complete is already true AND final_score is already set, this
-    // submission was previously processed. Return the cached result immediately
-    // so we don't recompute analytics or overwrite existing data.
     if (sub.is_complete === true && sub.final_score != null) {
       return NextResponse.json({
-        score:     sub.final_score,
+        score:      sub.final_score,
         violations: sub.cheat_violations ?? 0,
         cheatFlag:  sub.cheat_flag ?? false,
         duplicate:  true,
@@ -88,95 +91,110 @@ export async function POST(req: Request) {
     }
 
     const questions: any[] = sub.activities?.quizzes?.questions ?? []
-    // Use answers from the request body — they are the freshest snapshot.
-    // sub.answers may be stale or empty if the browser-client write was blocked by RLS.
+
+    // Prefer answers from the request body (freshest client snapshot).
+    // Fall back to the DB value only when the body carries nothing.
     const answersToEvaluate =
       Object.keys(clientAnswers).length > 0 ? clientAnswers : (sub.answers ?? {})
+
     const { total } = evaluateSubmission(questions, answersToEvaluate)
 
-    // ── Cheat log count ───────────────────────────────────────────────────
-    const { data: logs } = await supabase
-      .from('quiz_logs')
-      .select('id')
-      .eq('submission_id', submissionId)
-
-    const violations = logs?.length || 0
-    const cheatFlag  = violations >= 6
+    // ── Cheat log count (admin-only read) ─────────────────────────────────
+    let violations = 0
+    if (adminClient) {
+      const { data: logs } = await adminClient
+        .from('quiz_logs')
+        .select('id')
+        .eq('submission_id', submissionId)
+      violations = logs?.length || 0
+    }
+    const cheatFlag = violations >= 6
 
     // ── Resolve time_per_question ─────────────────────────────────────────
-    // Prefer the value that was just saved to the submission row (written by
-    // the client before calling this endpoint). Fall back to the body payload,
-    // then to an empty map. This ensures the DB is the source of truth.
     const storedTimePerQuestion: Record<string, number> =
       sub.time_per_question && typeof sub.time_per_question === 'object'
         ? sub.time_per_question
         : clientTimePerQuestion
 
-    // ── Update submission record ──────────────────────────────────────────
-    // All fields are written here via the admin client (bypasses RLS), so this
-    // is the authoritative write regardless of whether the browser-client write
-    // in the page component succeeded or was silently blocked.
-    await supabase.from('submissions').update({
-      answers:          answersToEvaluate,
-      auto_score:       total,
-      final_score:      total,
-      is_complete:      true,
-      submission_time:  clientSubmissionTime,
-      time_taken_seconds: clientTimeTaken,
-      cheat_violations: violations,
-      cheat_flag:       cheatFlag,
-      // Persist time_per_question only if it isn't already stored
-      ...(Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
-        ? { time_per_question: storedTimePerQuestion }
-        : {}),
-    }).eq('id', submissionId)
-    // ── Rebuild leaderboard (unchanged logic) ─────────────────────────────
-    await rebuildLeaderboard(supabase, sub.activity_id)
+    // ── CRITICAL WRITE — submission record ────────────────────────────────
+    if (!adminClient) {
+      console.error('[submit/route] CRITICAL — Admin client missing');
+      return NextResponse.json({ error: 'Server misconfigured' }, { status: 500 });
+    }
 
-    // ── Aggregate analytics (top-level) ──────────────────────────────────
-    // Fetch all submissions for this activity to recompute aggregate stats.
-    // We select time_per_question here so we can use it for per-question stats.
-    const { data: allSubs } = await supabase
+    const { error: updateError } = await adminClient
       .from('submissions')
-      .select('final_score, time_taken_seconds, is_complete, answers, time_per_question')
-      .eq('activity_id', sub.activity_id)
+      .update({
+        answers:            answersToEvaluate,
+        auto_score:         total,
+        final_score:        total,
+        is_complete:        true,
+        submission_time:    clientSubmissionTime,
+        time_taken_seconds: clientTimeTaken,
+        cheat_violations:   violations,
+        cheat_flag:         cheatFlag,
+        ...(Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
+          ? { time_per_question: storedTimePerQuestion }
+          : {}),
+      })
+      .eq('id', submissionId)
+      .select()
+      .single()
 
-    if (allSubs?.length) {
-      const done = allSubs.filter((s: any) => s.is_complete)
+    if (updateError) {
+      console.error('[submit/route] CRITICAL — submission update failed:', updateError.message)
+      return NextResponse.json({ error: 'Failed to save submission' }, { status: 500 })
+    }
 
-      // ── Top-level analytics row ─────────────────────────────────────────
-      const topLevel = {
-        activity_id:      sub.activity_id,
-        participant_count: allSubs.length,
-        avg_score:        done.length
-          ? Math.round(done.reduce((a: number, s: any) => a + (s.final_score ?? 0), 0) / done.length * 10) / 10
-          : 0,
-        completion_rate:  Math.round(done.length / allSubs.length * 100),
-        avg_time_seconds: done.length
-          ? Math.round(done.reduce((a: number, s: any) => a + (s.time_taken_seconds ?? 0), 0) / done.length)
-          : 0,
-        updated_at: new Date().toISOString(),
+    // ── Admin-only ops: leaderboard + analytics ───────────────────────────
+    // Requires cross-user SELECT and writes to admin tables.
+    // Wrapped so that missing service role key doesn't block the response.
+    if (adminClient) {
+      try {
+        await rebuildLeaderboard(adminClient, sub.activity_id)
+
+        const { data: allSubs } = await adminClient
+          .from('submissions')
+          .select('final_score, time_taken_seconds, is_complete, answers, time_per_question')
+          .eq('activity_id', sub.activity_id)
+
+        if (allSubs?.length) {
+          const done = allSubs.filter((s: any) => s.is_complete)
+
+          const topLevel = {
+            activity_id:       sub.activity_id,
+            participant_count: allSubs.length,
+            avg_score: done.length
+              ? Math.round(done.reduce((a: number, s: any) => a + (s.final_score ?? 0), 0) / done.length * 10) / 10
+              : 0,
+            completion_rate:  Math.round(done.length / allSubs.length * 100),
+            avg_time_seconds: done.length
+              ? Math.round(done.reduce((a: number, s: any) => a + (s.time_taken_seconds ?? 0), 0) / done.length)
+              : 0,
+            updated_at: new Date().toISOString(),
+          }
+
+          const questionStats = computeQuestionStats(questions, done)
+
+          const { data: existingAnalytics } = await adminClient
+            .from('analytics')
+            .select('question_stats')
+            .eq('activity_id', sub.activity_id)
+            .single()
+
+          const mergedStats = mergeQuestionStats(
+            existingAnalytics?.question_stats ?? [],
+            questionStats,
+          )
+
+          await adminClient.from('analytics').upsert(
+            { ...topLevel, question_stats: mergedStats },
+            { onConflict: 'activity_id' },
+          )
+        }
+      } catch (adminErr: any) {
+        console.error('[submit/route] admin ops failed (non-critical):', adminErr.message)
       }
-
-      // ── Per-question analytics ──────────────────────────────────────────
-      const questionStats = computeQuestionStats(questions, done)
-
-      // ── Fetch existing analytics row for safe merge ─────────────────────
-      const { data: existingAnalytics } = await supabase
-        .from('analytics')
-        .select('question_stats')
-        .eq('activity_id', sub.activity_id)
-        .single()
-
-      const mergedStats = mergeQuestionStats(
-        existingAnalytics?.question_stats ?? [],
-        questionStats,
-      )
-
-      await supabase.from('analytics').upsert(
-        { ...topLevel, question_stats: mergedStats },
-        { onConflict: 'activity_id' },
-      )
     }
 
     return NextResponse.json({ score: total, violations, cheatFlag })
@@ -188,116 +206,60 @@ export async function POST(req: Request) {
 }
 
 // ── computeQuestionStats ───────────────────────────────────────────────────
-/**
- * For each question, iterate over ALL complete submissions and compute:
- *   attempts   — number of submissions that answered this question
- *   correct    — number that got it right
- *   accuracy   — (correct / attempts) * 100, integer, 0 if no attempts
- *   avg_time   — mean capped time spent, in seconds (floating-point during
- *                computation, rounded to 1 decimal in final value)
- *
- * Mapping is strictly by question_id — never by index.
- * Missing time entries default to 0 and are excluded from the average
- * (we only average over subs that actually have a time entry for the question).
- */
 function computeQuestionStats(
   questions: any[],
   completedSubs: any[],
-): Array<{
-  question_id: string
-  attempts: number
-  correct: number
-  accuracy: number
-  avg_time: number
-}> {
+): Array<{ question_id: string; attempts: number; correct: number; accuracy: number; avg_time: number }> {
   return questions
     .filter((q: any) => q?.id)
     .map((q: any) => {
-      let attempts = 0
-      let correct  = 0
-      let timeSum  = 0
-      let timeCount = 0  // only count subs that have a real time entry
+      let attempts = 0, correct = 0, timeSum = 0, timeCount = 0
 
       for (const sub of completedSubs) {
         const answers: Record<string, string> =
           sub.answers && typeof sub.answers === 'object' ? sub.answers : {}
         const tpq: Record<string, unknown> =
           sub.time_per_question && typeof sub.time_per_question === 'object'
-            ? sub.time_per_question
-            : {}
+            ? sub.time_per_question : {}
 
         const rawAnswer = answers[q.id]
-
-        // Only count as an attempt if an answer was provided
         if (rawAnswer != null && rawAnswer !== '') {
           attempts++
           if (isCorrect(q, rawAnswer)) correct++
         }
-
-        // Time: only include if the key exists; cap at MAX
         if (Object.prototype.hasOwnProperty.call(tpq, q.id)) {
-          const cappedTime = safeTime(tpq[q.id])
-          timeSum   += cappedTime
+          timeSum += safeTime(tpq[q.id])
           timeCount++
         }
       }
-
-      const accuracy = attempts > 0
-        ? Math.round((correct / attempts) * 100)
-        : 0
-
-      // avg_time: float during computation, round to 1 decimal
-      const avg_time = timeCount > 0
-        ? Math.round((timeSum / timeCount) * 10) / 10
-        : 0
 
       return {
         question_id: q.id,
         attempts,
         correct,
-        accuracy,
-        avg_time,
+        accuracy: attempts  > 0 ? Math.round((correct / attempts) * 100) : 0,
+        avg_time: timeCount > 0 ? Math.round((timeSum  / timeCount) * 10) / 10 : 0,
       }
     })
 }
 
-// ── mergeQuestionStats ────────────────────────────────────────────────────
-/**
- * Merges freshly-computed stats into the existing array from the DB.
- * Strategy:
- *   - existing entries NOT in the new computation are preserved unchanged
- *   - existing entries that ARE in the new computation are replaced with
- *     the new values (which are computed from the full submission set)
- *   - new entries not previously in the DB are appended
- *
- * This is safe to call concurrently — the worst case is that two writers
- * both compute from the same full set and write identical values.
- */
+// ── mergeQuestionStats ─────────────────────────────────────────────────────
 function mergeQuestionStats(
   existing: Array<{ question_id: string; [key: string]: any }>,
-  fresh: Array<{ question_id: string; [key: string]: any }>,
+  fresh:    Array<{ question_id: string; [key: string]: any }>,
 ): Array<{ question_id: string; [key: string]: any }> {
   const freshMap = new Map(fresh.map(s => [s.question_id, s]))
-
-  // Start with existing entries; replace any that appear in the fresh set
   const merged = (Array.isArray(existing) ? existing : []).map(entry =>
-    freshMap.has(entry.question_id)
-      ? freshMap.get(entry.question_id)!
-      : entry,
+    freshMap.has(entry.question_id) ? freshMap.get(entry.question_id)! : entry,
   )
-
-  // Append fresh entries that didn't exist before
   const existingIds = new Set(merged.map((e: any) => e.question_id))
   for (const entry of fresh) {
-    if (!existingIds.has(entry.question_id)) {
-      merged.push(entry)
-    }
+    if (!existingIds.has(entry.question_id)) merged.push(entry)
   }
-
   return merged
 }
 
-// ── rebuildLeaderboard ────────────────────────────────────────────────────
+// ── rebuildLeaderboard ─────────────────────────────────────────────────────
 async function rebuildLeaderboard(supabase: any, activityId: string) {
   const { data: subs } = await supabase
     .from('submissions')
