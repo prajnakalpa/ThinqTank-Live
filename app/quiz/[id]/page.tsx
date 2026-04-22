@@ -135,13 +135,12 @@ const answersRef     = useRef<Record<string, string>>({})
     }
     const timePerQuestion = { ...timeMapRef.current }
     await supabase.from('submissions').update({
-      answers: currentAnswers,
-      is_complete: true,
-      submission_time: new Date().toISOString(),
-      time_taken_seconds: duration,
-      time_per_question: timePerQuestion,
-    }).eq('id', subId)
-
+  answers:            JSON.stringify(currentAnswers),
+  is_complete:        true,
+  submission_time:    new Date().toISOString(),
+  time_taken_seconds: duration,
+  time_per_question:  JSON.stringify(timePerQuestion),
+}).eq('id', subId)
     
     const autoRes = await fetch('/api/quiz/submit', {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -311,15 +310,13 @@ if (!autoRes.ok) {
 
 
     
-    const submitRes = await fetch('/api/quiz/submit', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    submissionId: submission.id,
-    answers: finalAnswers,
-    submission_time: new Date().toISOString(),
-    time_taken_seconds: timeTaken,
-    time_per_question: timePerQuestion,
+    const submitRes = await supabase.from('submissions').update({
+  answers:            JSON.stringify(finalAnswers),
+  is_complete:        true,
+  submission_time:    new Date().toISOString(),
+  time_taken_seconds: timeTaken,
+  time_per_question:  JSON.stringify(timePerQuestion),
+}).eq('id', submission.id)
   }),
 })
 if (!submitRes.ok) {
