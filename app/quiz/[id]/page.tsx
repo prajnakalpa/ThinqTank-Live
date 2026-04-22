@@ -141,16 +141,22 @@ const answersRef     = useRef<Record<string, string>>({})
       time_taken_seconds: duration,
       time_per_question: timePerQuestion,
     }).eq('id', subId)
-    await fetch('/api/quiz/submit', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        submissionId: subId,
-        answers: currentAnswers,
-        submission_time: new Date().toISOString(),
-        time_taken_seconds: duration,
-        time_per_question: timePerQuestion,
-      }),
-    })
+
+    
+    const autoRes = await fetch('/api/quiz/submit', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    submissionId: subId,
+    answers: currentAnswers,
+    submission_time: new Date().toISOString(),
+    time_taken_seconds: duration,
+    time_per_question: timePerQuestion,
+  }),
+})
+if (!autoRes.ok) {
+  console.error('[doAutoSubmit] API submit failed:', autoRes.status, await autoRes.text())
+}
+    
     // Sync submission state so the breakdown screen has the real answers
     setSubmission((prev: any) => ({
       ...prev,
@@ -303,20 +309,24 @@ const answersRef     = useRef<Record<string, string>>({})
       time_per_question: timePerQuestion,
     }).eq('id', submission.id)
 
-    await fetch('/api/quiz/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:
-        
-        JSON.stringify({
-        submissionId: submission.id,
-        answers: answersRef.current, // <--- Change this to answersRef.current
-        submission_time: new Date().toISOString(),
-        time_taken_seconds: timeTaken,
-        time_per_question: timePerQuestion,
-        
-      }),
-    })
+
+    
+    const submitRes = await fetch('/api/quiz/submit', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    submissionId: submission.id,
+    answers: finalAnswers,
+    submission_time: new Date().toISOString(),
+    time_taken_seconds: timeTaken,
+    time_per_question: timePerQuestion,
+  }),
+})
+if (!submitRes.ok) {
+  console.error('[handleSubmit] API submit failed:', submitRes.status, await submitRes.text())
+}
+
+                                              
 
     // Update submission state with the live answers so the breakdown screen
     // reads the correct data (submission was set to the initial DB row on load).
