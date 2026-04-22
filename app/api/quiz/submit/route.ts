@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { evaluateSubmission, evaluateAnswer } from '@/lib/evaluation'
+import { cookies } from 'next/headers'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const MAX_QUESTION_TIME_SECONDS = 600
@@ -60,7 +61,7 @@ export async function POST(req: Request) {
 
     
 
-import { cookies } from 'next/headers'
+
 
 const userClient = createServerClient(cookies())
 
