@@ -317,7 +317,7 @@ if (!autoRes.ok) {
   time_taken_seconds: timeTaken,
   time_per_question:  JSON.stringify(timePerQuestion),
 }).eq('id', submission.id)
-  }),
+
 })
 if (!submitRes.ok) {
   console.error('[handleSubmit] API submit failed:', submitRes.status, await submitRes.text())
