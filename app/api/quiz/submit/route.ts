@@ -41,17 +41,19 @@ export async function POST(req: Request) {
         : {}
 
     // userClient — authenticated via the user's session cookie.
-    // Used for all reads and the primary submission write.
+    // RLS allows SELECT and limited UPDATE on the user's own row.
+    // Cannot write is_complete, final_score, or cheat fields (admin-only via RLS WITH CHECK).
     const userClient = createServerClient()
 
-    // adminClient — service role, bypasses RLS.
-    // Used ONLY for score write, leaderboard, analytics.
-    // The rest of the route degrades gracefully if this is unavailable.
+    // adminClient — service-role key, bypasses RLS entirely.
+    // Required for writing is_complete, final_score, auto_score, cheat fields.
+    // If SUPABASE_SERVICE_ROLE_KEY is missing, answers are saved via userClient
+    // but scoring is skipped and a 503 is returned — loud failure, not silent data loss.
     let adminClient: any = null
     try {
       adminClient = createAdminClient()
     } catch (e) {
-      console.warn('[submit/route] createAdminClient failed — score write will use userClient:', (e as Error).message)
+      console.warn('[submit/route] createAdminClient failed:', (e as Error).message)
     }
 
     // ── Fetch submission + question tree ──────────────────────────────────
@@ -78,6 +80,8 @@ export async function POST(req: Request) {
 
     const questions: any[] = sub.activities?.quizzes?.questions ?? []
 
+    // Prefer answers from request body (freshest client snapshot).
+    // Fall back to DB value only if body carries nothing.
     const answersToEvaluate =
       Object.keys(clientAnswers).length > 0 ? clientAnswers : (sub.answers ?? {})
 
@@ -100,28 +104,22 @@ export async function POST(req: Request) {
         ? sub.time_per_question
         : clientTimePerQuestion
 
-
-
-
-    
-// ── CRITICAL WRITE ────────────────────────────────────────────────────
-    // adminClient (service role) bypasses RLS entirely and is required to
-    // write is_complete, final_score, auto_score, cheat_violations, cheat_flag.
-    // userClient (anon + user session) can only write user-owned fields:
-    // answers, submission_time, time_taken_seconds, time_per_question.
-    //
-    // When adminClient is unavailable, we do a degraded write:
-    // answers are saved so the user's work is not lost, but scoring is skipped
-    // and a 503 is returned so the failure is visible (not a silent 200).
-
     const tpqPatch =
       Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
         ? { time_per_question: storedTimePerQuestion }
         : {}
 
+    // ── CRITICAL WRITE ────────────────────────────────────────────────────
+    // adminClient (service role) is required for is_complete, final_score,
+    // auto_score, cheat_violations, cheat_flag — RLS WITH CHECK blocks these
+    // for the user's own session.
+    //
+    // Degraded path (adminClient null): save answers via userClient so the
+    // user's work is not lost. Skip scoring. Return 503 so the failure is
+    // visible in server logs — not silently swallowed as a 200.
+
     if (!adminClient) {
-      // Degraded path — save answers only, skip scoring
-      const { error: answersWriteError } = await userClient
+      const { error: answersErr } = await userClient
         .from('submissions')
         .update({
           answers:            answersToEvaluate,
@@ -131,19 +129,19 @@ export async function POST(req: Request) {
         })
         .eq('id', submissionId)
 
-      if (answersWriteError) {
-        console.error('[submit/route] CRITICAL — answers write failed (userClient):', answersWriteError.message)
+      if (answersErr) {
+        console.error('[submit/route] CRITICAL — answers write failed (userClient):', answersErr.message)
         return NextResponse.json({ error: 'Failed to save answers' }, { status: 500 })
       }
 
-      console.error('[submit/route] CRITICAL — SUPABASE_SERVICE_ROLE_KEY not configured; answers saved but scoring skipped')
+      console.error('[submit/route] CRITICAL — SUPABASE_SERVICE_ROLE_KEY not configured. Answers saved but scoring skipped. Set the key in Vercel → Settings → Environment Variables.')
       return NextResponse.json(
-        { error: 'Scoring unavailable: SUPABASE_SERVICE_ROLE_KEY not configured on server' },
+        { error: 'Scoring unavailable: SUPABASE_SERVICE_ROLE_KEY not configured' },
         { status: 503 }
       )
     }
 
-    // Full write — adminClient bypasses RLS for admin-only fields
+    // Full write — adminClient bypasses RLS for all fields
     const { error: updateError } = await adminClient
       .from('submissions')
       .update({
@@ -166,59 +164,51 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Failed to save submission' }, { status: 500 })
     }
 
-
-
-
-
-
-    
     // ── Admin-only ops: leaderboard + analytics ───────────────────────────
-    if (adminClient) {
-      try {
-        await rebuildLeaderboard(adminClient, sub.activity_id)
+    try {
+      await rebuildLeaderboard(adminClient, sub.activity_id)
 
-        const { data: allSubs } = await adminClient
-          .from('submissions')
-          .select('final_score, time_taken_seconds, is_complete, answers, time_per_question')
-          .eq('activity_id', sub.activity_id)
+      const { data: allSubs } = await adminClient
+        .from('submissions')
+        .select('final_score, time_taken_seconds, is_complete, answers, time_per_question')
+        .eq('activity_id', sub.activity_id)
 
-        if (allSubs?.length) {
-          const done = allSubs.filter((s: any) => s.is_complete)
+      if (allSubs?.length) {
+        const done = allSubs.filter((s: any) => s.is_complete)
 
-          const topLevel = {
-            activity_id:       sub.activity_id,
-            participant_count: allSubs.length,
-            avg_score: done.length
-              ? Math.round(done.reduce((a: number, s: any) => a + (s.final_score ?? 0), 0) / done.length * 10) / 10
-              : 0,
-            completion_rate:  Math.round(done.length / allSubs.length * 100),
-            avg_time_seconds: done.length
-              ? Math.round(done.reduce((a: number, s: any) => a + (s.time_taken_seconds ?? 0), 0) / done.length)
-              : 0,
-            updated_at: new Date().toISOString(),
-          }
-
-          const questionStats = computeQuestionStats(questions, done)
-
-          const { data: existingAnalytics } = await adminClient
-            .from('analytics')
-            .select('question_stats')
-            .eq('activity_id', sub.activity_id)
-            .single()
-
-          const mergedStats = mergeQuestionStats(
-            existingAnalytics?.question_stats ?? [],
-            questionStats,
-          )
-
-          await adminClient.from('analytics').upsert(
-            { ...topLevel, question_stats: mergedStats },
-            { onConflict: 'activity_id' },
-          )
+        const topLevel = {
+          activity_id:       sub.activity_id,
+          participant_count: allSubs.length,
+          avg_score: done.length
+            ? Math.round(done.reduce((a: number, s: any) => a + (s.final_score ?? 0), 0) / done.length * 10) / 10
+            : 0,
+          completion_rate:  Math.round(done.length / allSubs.length * 100),
+          avg_time_seconds: done.length
+            ? Math.round(done.reduce((a: number, s: any) => a + (s.time_taken_seconds ?? 0), 0) / done.length)
+            : 0,
+          updated_at: new Date().toISOString(),
         }
-      } catch (adminErr: any) {
-        console.error('[submit/route] admin ops failed (non-critical):', adminErr.message)
+
+        const questionStats = computeQuestionStats(questions, done)
+
+        const { data: existingAnalytics } = await adminClient
+          .from('analytics')
+          .select('question_stats')
+          .eq('activity_id', sub.activity_id)
+          .single()
+
+        const mergedStats = mergeQuestionStats(
+          existingAnalytics?.question_stats ?? [],
+          questionStats,
+        )
+
+        await adminClient.from('analytics').upsert(
+          { ...topLevel, question_stats: mergedStats },
+          { onConflict: 'activity_id' },
+        )
       }
+    } catch (adminErr: any) {
+      console.error('[submit/route] admin ops failed (non-critical):', adminErr.message)
     }
 
     return NextResponse.json({ score: total, violations, cheatFlag })
@@ -229,12 +219,6 @@ export async function POST(req: Request) {
   }
 }
 
-
-
-
-
-
-// ── computeQuestionStats (unchanged) ──────────────────────────────────────
 function computeQuestionStats(
   questions: any[],
   completedSubs: any[],
@@ -272,7 +256,6 @@ function computeQuestionStats(
     })
 }
 
-// ── mergeQuestionStats (unchanged) ────────────────────────────────────────
 function mergeQuestionStats(
   existing: Array<{ question_id: string; [key: string]: any }>,
   fresh:    Array<{ question_id: string; [key: string]: any }>,
@@ -288,7 +271,6 @@ function mergeQuestionStats(
   return merged
 }
 
-// ── rebuildLeaderboard (unchanged) ────────────────────────────────────────
 async function rebuildLeaderboard(supabase: any, activityId: string) {
   const { data: subs } = await supabase
     .from('submissions')
