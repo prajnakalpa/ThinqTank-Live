@@ -122,7 +122,7 @@ export async function POST(req: Request) {
       const { error: answersErr } = await userClient
         .from('submissions')
         .update({
-          answers:            answersToEvaluate,
+          answers:            JSON.stringify(answersToEvaluate),
           submission_time:    clientSubmissionTime,
           time_taken_seconds: clientTimeTaken,
           ...tpqPatch,
@@ -145,7 +145,7 @@ export async function POST(req: Request) {
     const { error: updateError } = await adminClient
       .from('submissions')
       .update({
-        answers:            answersToEvaluate,
+        answers:            JSON.stringify(answersToEvaluate),
         auto_score:         total,
         final_score:        total,
         is_complete:        true,
