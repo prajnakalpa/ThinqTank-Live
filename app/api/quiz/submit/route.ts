@@ -57,8 +57,15 @@ export async function POST(req: Request) {
     // analytics/leaderboard. Isolated in its own try/catch: a missing or
     // misconfigured SUPABASE_SERVICE_ROLE_KEY degrades analytics gracefully
     // instead of crashing the entire route.
-    const userClient = createServerClient()
 
+    
+
+import { cookies } from 'next/headers'
+
+const userClient = createServerClient(cookies())
+
+
+    
     let adminClient: any = null
     try {
       adminClient = createAdminClient()
