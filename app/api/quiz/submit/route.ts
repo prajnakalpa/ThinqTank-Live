@@ -3,12 +3,8 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { evaluateSubmission, evaluateAnswer } from '@/lib/evaluation'
-import { cookies } from 'next/headers'
 
-// ── Constants ──────────────────────────────────────────────────────────────
 const MAX_QUESTION_TIME_SECONDS = 600
-
-// ── Helpers ────────────────────────────────────────────────────────────────
 
 function isCorrect(q: any, rawAnswer: string): boolean {
   if (!rawAnswer && rawAnswer !== '0') return false
@@ -24,7 +20,6 @@ function safeTime(value: unknown): number {
   return Math.min(Math.floor(n), MAX_QUESTION_TIME_SECONDS)
 }
 
-// ── Main handler ───────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -45,38 +40,21 @@ export async function POST(req: Request) {
         ? body.time_per_question
         : {}
 
-    // ── Clients ───────────────────────────────────────────────────────────
-    //
-    // userClient — server-side Supabase using NEXT_PUBLIC_SUPABASE_ANON_KEY
-    // plus the user's auth cookie forwarded from this request.
-    // Uses the IDENTICAL project + credentials as the browser client that
-    // created the submission row, so RLS (auth.uid() = user_id) is satisfied
-    // and NO service role key is required.
-    //
-    // adminClient — service-role key, bypasses RLS entirely.
-    // Only used for cross-user reads (all submissions) and writes to
-    // analytics/leaderboard. Isolated in its own try/catch: a missing or
-    // misconfigured SUPABASE_SERVICE_ROLE_KEY degrades analytics gracefully
-    // instead of crashing the entire route.
+    // userClient — authenticated via the user's session cookie.
+    // Used for all reads and the primary submission write.
+    const userClient = createServerClient()
 
-    
-
-
-
-const userClient = createServerClient(cookies())
-
-
-    
+    // adminClient — service role, bypasses RLS.
+    // Used ONLY for score write, leaderboard, analytics.
+    // The rest of the route degrades gracefully if this is unavailable.
     let adminClient: any = null
     try {
       adminClient = createAdminClient()
     } catch (e) {
-      console.warn('[submit/route] createAdminClient failed — admin ops disabled:', (e as Error).message)
+      console.warn('[submit/route] createAdminClient failed — score write will use userClient:', (e as Error).message)
     }
 
     // ── Fetch submission + question tree ──────────────────────────────────
-    // userClient has SELECT on the participant's own submission and on
-    // activities/quizzes/questions (same access the quiz page uses).
     const { data: sub, error } = await userClient
       .from('submissions')
       .select('*, activities(id, quizzes(id, questions(*)))')
@@ -100,8 +78,6 @@ const userClient = createServerClient(cookies())
 
     const questions: any[] = sub.activities?.quizzes?.questions ?? []
 
-    // Prefer answers from the request body (freshest client snapshot).
-    // Fall back to the DB value only when the body carries nothing.
     const answersToEvaluate =
       Object.keys(clientAnswers).length > 0 ? clientAnswers : (sub.answers ?? {})
 
@@ -124,13 +100,15 @@ const userClient = createServerClient(cookies())
         ? sub.time_per_question
         : clientTimePerQuestion
 
-    // ── CRITICAL WRITE — submission record ────────────────────────────────
-    if (!adminClient) {
-      console.error('[submit/route] CRITICAL — Admin client missing');
-      return NextResponse.json({ error: 'Server misconfigured' }, { status: 500 });
-    }
+    // ── CRITICAL WRITE ────────────────────────────────────────────────────
+    // Use adminClient (service role) when available so it can write
+    // final_score and is_complete regardless of RLS policy.
+    // Fall back to userClient only if adminClient is unavailable — the
+    // user can at minimum save their answers and submission_time on their
+    // own row; final_score will be null until adminClient is configured.
+    const writeClient = adminClient ?? userClient
 
-    const { error: updateError } = await adminClient
+    const { error: updateError } = await writeClient
       .from('submissions')
       .update({
         answers:            answersToEvaluate,
@@ -150,13 +128,11 @@ const userClient = createServerClient(cookies())
       .single()
 
     if (updateError) {
-      console.error('[submit/route] CRITICAL — submission update failed:', updateError.message)
+      console.error('[submit/route] submission update failed:', updateError.message)
       return NextResponse.json({ error: 'Failed to save submission' }, { status: 500 })
     }
 
     // ── Admin-only ops: leaderboard + analytics ───────────────────────────
-    // Requires cross-user SELECT and writes to admin tables.
-    // Wrapped so that missing service role key doesn't block the response.
     if (adminClient) {
       try {
         await rebuildLeaderboard(adminClient, sub.activity_id)
@@ -213,7 +189,7 @@ const userClient = createServerClient(cookies())
   }
 }
 
-// ── computeQuestionStats ───────────────────────────────────────────────────
+// ── computeQuestionStats (unchanged) ──────────────────────────────────────
 function computeQuestionStats(
   questions: any[],
   completedSubs: any[],
@@ -251,7 +227,7 @@ function computeQuestionStats(
     })
 }
 
-// ── mergeQuestionStats ─────────────────────────────────────────────────────
+// ── mergeQuestionStats (unchanged) ────────────────────────────────────────
 function mergeQuestionStats(
   existing: Array<{ question_id: string; [key: string]: any }>,
   fresh:    Array<{ question_id: string; [key: string]: any }>,
@@ -267,7 +243,7 @@ function mergeQuestionStats(
   return merged
 }
 
-// ── rebuildLeaderboard ─────────────────────────────────────────────────────
+// ── rebuildLeaderboard (unchanged) ────────────────────────────────────────
 async function rebuildLeaderboard(supabase: any, activityId: string) {
   const { data: subs } = await supabase
     .from('submissions')
