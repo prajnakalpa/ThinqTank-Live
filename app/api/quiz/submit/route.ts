@@ -100,15 +100,51 @@ export async function POST(req: Request) {
         ? sub.time_per_question
         : clientTimePerQuestion
 
-    // ── CRITICAL WRITE ────────────────────────────────────────────────────
-    // Use adminClient (service role) when available so it can write
-    // final_score and is_complete regardless of RLS policy.
-    // Fall back to userClient only if adminClient is unavailable — the
-    // user can at minimum save their answers and submission_time on their
-    // own row; final_score will be null until adminClient is configured.
-    const writeClient = adminClient ?? userClient
 
-    const { error: updateError } = await writeClient
+
+
+    
+// ── CRITICAL WRITE ────────────────────────────────────────────────────
+    // adminClient (service role) bypasses RLS entirely and is required to
+    // write is_complete, final_score, auto_score, cheat_violations, cheat_flag.
+    // userClient (anon + user session) can only write user-owned fields:
+    // answers, submission_time, time_taken_seconds, time_per_question.
+    //
+    // When adminClient is unavailable, we do a degraded write:
+    // answers are saved so the user's work is not lost, but scoring is skipped
+    // and a 503 is returned so the failure is visible (not a silent 200).
+
+    const tpqPatch =
+      Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
+        ? { time_per_question: storedTimePerQuestion }
+        : {}
+
+    if (!adminClient) {
+      // Degraded path — save answers only, skip scoring
+      const { error: answersWriteError } = await userClient
+        .from('submissions')
+        .update({
+          answers:            answersToEvaluate,
+          submission_time:    clientSubmissionTime,
+          time_taken_seconds: clientTimeTaken,
+          ...tpqPatch,
+        })
+        .eq('id', submissionId)
+
+      if (answersWriteError) {
+        console.error('[submit/route] CRITICAL — answers write failed (userClient):', answersWriteError.message)
+        return NextResponse.json({ error: 'Failed to save answers' }, { status: 500 })
+      }
+
+      console.error('[submit/route] CRITICAL — SUPABASE_SERVICE_ROLE_KEY not configured; answers saved but scoring skipped')
+      return NextResponse.json(
+        { error: 'Scoring unavailable: SUPABASE_SERVICE_ROLE_KEY not configured on server' },
+        { status: 503 }
+      )
+    }
+
+    // Full write — adminClient bypasses RLS for admin-only fields
+    const { error: updateError } = await adminClient
       .from('submissions')
       .update({
         answers:            answersToEvaluate,
@@ -119,19 +155,23 @@ export async function POST(req: Request) {
         time_taken_seconds: clientTimeTaken,
         cheat_violations:   violations,
         cheat_flag:         cheatFlag,
-        ...(Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
-          ? { time_per_question: storedTimePerQuestion }
-          : {}),
+        ...tpqPatch,
       })
       .eq('id', submissionId)
       .select()
       .single()
 
     if (updateError) {
-      console.error('[submit/route] submission update failed:', updateError.message)
+      console.error('[submit/route] CRITICAL — submission update failed (adminClient):', updateError.message)
       return NextResponse.json({ error: 'Failed to save submission' }, { status: 500 })
     }
 
+
+
+
+
+
+    
     // ── Admin-only ops: leaderboard + analytics ───────────────────────────
     if (adminClient) {
       try {
@@ -188,6 +228,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
+
+
+
+
+
 
 // ── computeQuestionStats (unchanged) ──────────────────────────────────────
 function computeQuestionStats(
