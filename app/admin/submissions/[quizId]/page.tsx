@@ -12,20 +12,31 @@ function isMcq(type?: string): boolean {
 }
 
 /**
+ * Safely parse a TEXT column that may be a JSON string or already an object.
+ * Supabase TEXT columns that store JSON come back as strings — they must be
+ * parsed before use. This is the root cause of the "admin can't see answers" bug.
+ */
+function parseJsonField<T>(raw: unknown, fallback: T): T {
+  if (raw === null || raw === undefined) return fallback
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as T
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) as T } catch { return fallback }
+  }
+  return fallback
+}
+
+/**
  * Decode a raw stored answer for display.
  * MCQ answers are stored as string indices ("0", "1", …).
- * Never shows a raw index to the admin.
  */
 function decodeUserAnswer(q: any, rawAnswer: string): string {
   if (rawAnswer === '') return 'No Answer'
-
   if (isMcq(q.type)) {
     if (!Array.isArray(q.options) || q.options.length === 0) return 'No Answer'
     const idx = Number(rawAnswer)
     if (isNaN(idx)) return 'No Answer'
     return q.options[idx] ?? 'No Answer'
   }
-
   return rawAnswer
 }
 
@@ -44,8 +55,6 @@ function decodeCorrectAnswer(q: any): string {
 
 /**
  * Determine whether the user's answer is correct.
- * MCQ: exact string-index match.
- * Objective: uses existing evaluateAnswer fuzzy logic.
  */
 function checkCorrect(q: any, rawAnswer: string): boolean {
   if (rawAnswer === '') return false
@@ -57,8 +66,6 @@ function checkCorrect(q: any, rawAnswer: string): boolean {
 
 /**
  * Calculate the numeric score for a single question.
- * MCQ: full marks or zero.
- * Objective: existing evaluateAnswer.
  */
 function calcScore(q: any, rawAnswer: string): number {
   if (rawAnswer === '') return 0
@@ -187,7 +194,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [params.quizId])
+  useEffect(() => { load() }, [params.quizId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const flash = (text: string, ok = true) => {
     setMsg({ text, ok })
@@ -364,9 +371,13 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {subs.map((s, i) => {
             const isOpen     = expanded === s.id
-            const rawAnswers: Record<string, string> =
-              typeof s.answers === 'object' && !Array.isArray(s.answers)
-                ? s.answers : {}
+
+            // ── KEY FIX: answers is a TEXT column in Supabase.
+            // It comes back as a JSON string like '{"uuid":"2"}', NOT an object.
+            // Previously this was: typeof s.answers === 'object' ? s.answers : {}
+            // which always returned {} because typeof "string" !== "object".
+            const rawAnswers = parseJsonField<Record<string, string>>(s.answers, {})
+
             const isDeleting = deleting === s.id
 
             return (
@@ -526,11 +537,9 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                           const correct      = checkCorrect(q, rawAnswer)
                           const qMcq         = isMcq(q.type)
 
-                          // Decoded text values — never shows raw index to admin
                           const userDisplay    = decodeUserAnswer(q, rawAnswer)
                           const correctDisplay = decodeCorrectAnswer(q)
 
-                          // Left border colour: green if full marks, amber if partial, grey if zero
                           const borderColor = score >= maxPts
                             ? '#22c55e'
                             : score > 0
@@ -551,7 +560,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                               {/* Question header row */}
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                  {/* Question number + type badge */}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                                     <span style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700 }}>
                                       Q{idx + 1}
@@ -566,7 +574,6 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                                       </span>
                                     )}
                                   </div>
-                                  {/* Question image (if present) */}
                                   {q.image_url && (
                                     <img
                                       src={q.image_url}
@@ -581,8 +588,8 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                                 <ScorePip score={score} max={maxPts} />
                               </div>
 
-                              {/* Answer comparison — stacks to 1 col on mobile via .ans-grid */}
-                              <div className="ans-grid">
+                              {/* Answer comparison */}
+                              <div className="ans-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
 
                                 {/* User's answer */}
                                 <div style={{
@@ -598,7 +605,7 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                                       No Answer
                                     </span>
                                   ) : (
-                                    <span className={correct ? 'text-green-600' : 'text-red-600'} style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: correct ? '#4ade80' : '#f87171' }}>
                                       {correct ? '✓ ' : '✗ '}{userDisplay}
                                     </span>
                                   )}
@@ -645,26 +652,20 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
                                               ? '1px solid rgba(239,68,68,0.12)'
                                               : '1px solid transparent',
                                         }}>
-                                          {/* Letter label */}
                                           <span style={{
                                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                             width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
-                                            background: isCorrectOpt
-                                              ? 'rgba(34,197,94,0.15)'
-                                              : 'rgba(148,163,184,0.08)',
+                                            background: isCorrectOpt ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.08)',
                                             color: isCorrectOpt ? '#4ade80' : '#475569',
                                             fontSize: '0.65rem', fontWeight: 700,
                                           }}>
                                             {String.fromCharCode(65 + optIdx)}
                                           </span>
-                                          <span style={{ fontSize: '0.8rem', flex: 1 }}>
-                                            <span className={
-                                              isCorrectOpt ? 'text-green-600'
-                                              : isUserChoice ? 'text-red-600'
-                                              : ''
-                                            } style={{ color: isCorrectOpt ? undefined : isUserChoice ? undefined : '#64748b' }}>
-                                              {opt}
-                                            </span>
+                                          <span style={{
+                                            fontSize: '0.8rem', flex: 1,
+                                            color: isCorrectOpt ? '#4ade80' : isUserChoice ? '#f87171' : '#64748b',
+                                          }}>
+                                            {opt}
                                           </span>
                                           {isCorrectOpt && (
                                             <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 700 }}>✓</span>
@@ -708,6 +709,14 @@ export default function SubmissionsPage({ params }: { params: { quizId: string }
           })}
         </div>
       )}
+
+      <style>{`
+        @media (max-width: 600px) {
+          .ans-grid { grid-template-columns: 1fr !important; }
+          .sub-row { font-size: 0.82rem; }
+          .sub-actions { width: 100%; justify-content: flex-end; }
+        }
+      `}</style>
 
     </div>
   )
