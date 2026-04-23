@@ -61,7 +61,13 @@ export async function POST(req: Request) {
     }
 
     // ── Fetch submission + questions ────────────────────────────────────
-    const { data: sub, error } = await userClient
+    // IMPORTANT: Must use adminClient here, not userClient.
+    // The questions table likely has RLS that blocks reads for regular users.
+    // If userClient is used, sub.activities?.quizzes?.questions returns []
+    // and evaluateSubmission([],  answers) = 0 — causing the "score is always 0"
+    // bug on first submit that only recalculate (which uses adminClient) fixes.
+    const fetchClient = adminClient ?? userClient
+    const { data: sub, error } = await fetchClient
       .from('submissions')
       .select('*, activities(id, quizzes(id, questions(*)))')
       .eq('id', submissionId)
