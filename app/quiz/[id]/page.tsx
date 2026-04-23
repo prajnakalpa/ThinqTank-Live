@@ -166,54 +166,115 @@ if (!autoRes.ok) {
   }
 
   // ── Load quiz ──────────────────────────────────────────────────────────
+
   const loadQuiz = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { router.push(`/login?redirect=/quiz/${params.id}`); return }
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    router.push(`/login?redirect=/quiz/${params.id}`)
+    return
+  }
 
-    const { data: act } = await supabase
-      .from('activities').select('*, quizzes(*, questions(*))')
-      .eq('id', params.id).single()
+  const { data: act } = await supabase
+    .from('activities')
+    .select('*, quizzes(*, questions(*))')
+    .eq('id', params.id)
+    .single()
 
-    if (!act || act.status === 'closed') { setState('closed'); return }
+  if (!act || act.status === 'closed') {
+    setState('closed')
+    return
+  }
 
-    setActivity(act)
-    const q  = act.quizzes; setQuiz(q)
-    const qs = (q?.questions ?? []).sort((a: any, b: any) => a.order_index - b.order_index)
-    setQuestions(qs)
+  setActivity(act)
 
-    const { data: existingSub } = await supabase
-      .from('submissions').select('*')
-      .eq('activity_id', params.id).eq('user_id', user.id).single()
+  const q = act.quizzes
+  setQuiz(q)
 
-    if (existingSub?.is_complete) { setState('submitted'); setSubmission(existingSub); return }
+  const qs = (q?.questions ?? []).sort(
+    (a: any, b: any) => a.order_index - b.order_index
+  )
+  setQuestions(qs)
 
-    const { data: profile } = await supabase.from('users').select('username').eq('id', user.id).single()
-    if (!profile?.username) { setState('username'); return }
+  const { data: existingSub } = await supabase
+    .from('submissions')
+    .select('*')
+    .eq('activity_id', params.id)
+    .eq('user_id', user.id)
+    .single()
 
-    if (existingSub) {
-      setSubmission(existingSub)
-      setAnswers(existingSub.answers ?? {})
-      const remaining = getSecondsRemaining(existingSub.start_time, q.duration_minutes * 60)
-      if (remaining <= 0) {
-        // Use existingSub.answers directly — answersRef.current hasn't synced yet
-        // because setAnswers() above is an async state update.
-        doAutoSubmit(existingSub.id, existingSub.answers ?? {}, q.duration_minutes * 60)
-        return
-      }
-      setTimeLeft(remaining)
-    } else {
-      const { data: newSub } = await supabase.from('submissions').insert({
-        activity_id: params.id, user_id: user.id, email: user.email,
-        username: profile.username, start_time: new Date().toISOString()
-      }).select().single()
-      setSubmission(newSub)
-      setTimeLeft(q.duration_minutes * 60)
+  // already submitted
+  if (existingSub?.is_complete) {
+    setSubmission(existingSub)
+    setState('submitted')
+    return
+  }
+
+  const { data: profile } = await supabase
+    .from('users')
+    .select('username')
+    .eq('id', user.id)
+    .single()
+
+  if (!profile?.username) {
+    setState('username')
+    return
+  }
+
+  if (existingSub) {
+    setSubmission(existingSub)
+
+    // ✅ FIX: parse answers from TEXT → object
+    const parsedAnswers: Record<string, string> = (() => {
+      const raw = existingSub.answers
+      if (!raw) return {}
+      if (typeof raw === 'object') return raw
+      try { return JSON.parse(raw) } catch { return {} }
+    })()
+
+    setAnswers(parsedAnswers)
+
+    const remaining = getSecondsRemaining(
+      existingSub.start_time,
+      q.duration_minutes * 60
+    )
+
+    if (remaining <= 0) {
+      // ✅ FIX: use parsedAnswers, not raw string
+      doAutoSubmit(
+        existingSub.id,
+        parsedAnswers,
+        q.duration_minutes * 60
+      )
+      return
     }
-    setState('quiz')
-  }, [params.id])
 
-  useEffect(() => { loadQuiz() }, [loadQuiz])
+    setTimeLeft(remaining)
+  } else {
+    const { data: newSub } = await supabase
+      .from('submissions')
+      .insert({
+        activity_id: params.id,
+        user_id: user.id,
+        email: user.email,
+        username: profile.username,
+        start_time: new Date().toISOString(),
+      })
+      .select()
+      .single()
 
+    setSubmission(newSub)
+    setTimeLeft(q.duration_minutes * 60)
+  }
+
+  setState('quiz')
+}, [params.id])
+
+useEffect(() => {
+  loadQuiz()
+}, [loadQuiz])
+
+
+  
   // ── Timer ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (state !== 'quiz' || !submission) return
