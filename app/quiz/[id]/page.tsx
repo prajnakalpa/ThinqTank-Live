@@ -300,25 +300,28 @@ if (!autoRes.ok) {
       console.info('[analytics] time_taken vs sum(time_per_question) mismatch', { timeTaken, sumPerQ })
     }
 
-    await supabase.from('submissions').update({
-      answers: finalAnswers,
-      is_complete: true,
-      submission_time: new Date().toISOString(),
-      time_taken_seconds: timeTaken,
-      time_per_question: timePerQuestion,
-    }).eq('id', submission.id)
+   await supabase.from('submissions')
+  .update({
+    answers: JSON.stringify(finalAnswers),
+    is_complete: true,
+    submission_time: new Date().toISOString(),
+    time_taken_seconds: timeTaken,
+    time_per_question: JSON.stringify(timePerQuestion),
+  })
+  .eq('id', submission.id)
 
-
-    
-    const submitRes = await supabase.from('submissions').update({
-  answers:            JSON.stringify(finalAnswers),
-  is_complete:        true,
-  submission_time:    new Date().toISOString(),
-  time_taken_seconds: timeTaken,
-  time_per_question:  JSON.stringify(timePerQuestion),
-}).eq('id', submission.id)
-
+const submitRes = await fetch('/api/quiz/submit', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    submissionId: submission.id,
+    answers: finalAnswers,
+    submission_time: new Date().toISOString(),
+    time_taken_seconds: timeTaken,
+    time_per_question: timePerQuestion,
+  }),
 })
+
 if (!submitRes.ok) {
   console.error('[handleSubmit] API submit failed:', submitRes.status, await submitRes.text())
 }
