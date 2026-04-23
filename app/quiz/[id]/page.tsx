@@ -11,7 +11,6 @@ import { evaluateAnswer } from '@/lib/evaluation'
 interface Props { params: { id: string } }
 
 // ── Per-question breakdown helpers ────────────────────────────────────────
-// These live outside the component so they are not re-created on every render.
 
 /** Decode the user's raw stored answer into human-readable text. */
 function decodeUserAnswer(q: any, rawAnswer: string | undefined): string {
@@ -42,12 +41,25 @@ function checkIsCorrect(q: any, rawAnswer: string | undefined): boolean {
   if (q.type?.includes('mcq')) {
     return rawAnswer === String(q.correct_option ?? -1)
   }
-  // Objective: use the same fuzzy evaluator as the backend
   try {
     return evaluateAnswer(q, rawAnswer) > 0
   } catch {
     return false
   }
+}
+
+/**
+ * Safely parse a TEXT column that might be a JSON string or already an object.
+ * The answers and time_per_question columns in Supabase are TEXT, so when
+ * fetched they come back as strings that need to be JSON.parsed.
+ */
+function parseJsonField<T>(raw: unknown, fallback: T): T {
+  if (raw === null || raw === undefined) return fallback
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as T
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) as T } catch { return fallback }
+  }
+  return fallback
 }
 
 export default function QuizPage({ params }: Props) {
@@ -64,35 +76,30 @@ export default function QuizPage({ params }: Props) {
   const [usernameError, setUsernameError] = useState('')
 
   const router   = useRouter()
-  // Stable Supabase client — must not be recreated on every render because
-  // a fresh instance mid-flight can lose the auth session for in-progress writes.
+  // Stable Supabase client — must not be recreated on every render
   const supabaseRef = useRef(createClient())
   const supabase    = supabaseRef.current
 
-  // ── Refs (anti-stale-closure + Silent Sentinel scope) ──────────────────
+  // ── Refs (anti-stale-closure) ──────────────────────────────────────────
   const timerRef       = useRef<NodeJS.Timeout>()
-
-const answersRef     = useRef<Record<string, string>>({})
-  
-  
-  const updateAnswer = (questionId: string, value: string) => {
-  setAnswers(prev => {
-    const next = { ...prev, [questionId]: value };
-    answersRef.current = next; // Syncs to the cheat sheet
-    return next;
-  });
-};
-
-  
+  const answersRef     = useRef<Record<string, string>>({})
   const submissionRef  = useRef<any>(null)
   const quizRef        = useRef<any>(null)
   const submittingRef  = useRef(false)
+
+  const updateAnswer = (questionId: string, value: string) => {
+    setAnswers(prev => {
+      const next = { ...prev, [questionId]: value }
+      answersRef.current = next
+      return next
+    })
+  }
 
   useEffect(() => { answersRef.current    = answers    }, [answers])
   useEffect(() => { submissionRef.current = submission }, [submission])
   useEffect(() => { quizRef.current       = quiz       }, [quiz])
 
-  // ── TIME-PER-QUESTION TRACKING REFS ───────────────────────────────────
+  // ── TIME-PER-QUESTION TRACKING ─────────────────────────────────────────
   const timeMapRef        = useRef<Record<string, number>>({})
   const lastSwitchTimeRef = useRef<number>(Date.now())
   const currentQRef       = useRef<number>(0)
@@ -121,10 +128,12 @@ const answersRef     = useRef<Record<string, string>>({})
     lastSwitchTimeRef.current = now
   }, [currentQ]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Auto-submit ────────────────────────────────────────────────────────
+  // ── Auto-submit (timer expiry) ─────────────────────────────────────────
   const doAutoSubmit = async (subId: string, currentAnswers: Record<string, string>, duration: number) => {
     if (submittingRef.current) return
-    submittingRef.current = true  // lock immediately — before any await
+    submittingRef.current = true
+
+    // Finalize time tracking
     const now = Date.now()
     const currentId = questionsRef.current[currentQRef.current]?.id
     if (currentId) {
@@ -134,147 +143,163 @@ const answersRef     = useRef<Record<string, string>>({})
       }
     }
     const timePerQuestion = { ...timeMapRef.current }
-    await supabase.from('submissions').update({
-  answers:            JSON.stringify(currentAnswers),
-  is_complete:        true,
-  submission_time:    new Date().toISOString(),
-  time_taken_seconds: duration,
-  time_per_question:  JSON.stringify(timePerQuestion),
-}).eq('id', subId)
-    
+
+    // ── CRITICAL DB UPDATE: answers + completion ───────────────────────
+    // time_per_question is NOT included here — if that column doesn't exist
+    // in the schema yet, including it would cause this entire update to fail,
+    // leaving is_complete=false and losing the user's answers.
+    const { error: criticalErr } = await supabase
+      .from('submissions')
+      .update({
+        answers:            JSON.stringify(currentAnswers),
+        is_complete:        true,
+        submission_time:    new Date().toISOString(),
+        time_taken_seconds: duration,
+      })
+      .eq('id', subId)
+
+    if (criticalErr) {
+      console.error('[doAutoSubmit] CRITICAL update failed:', criticalErr.message)
+    }
+
+    // ── NON-CRITICAL: save time_per_question separately ────────────────
+    if (Object.keys(timePerQuestion).length > 0) {
+      const { error: tpqErr } = await supabase
+        .from('submissions')
+        .update({ time_per_question: JSON.stringify(timePerQuestion) })
+        .eq('id', subId)
+      if (tpqErr) {
+        console.warn('[doAutoSubmit] time_per_question not saved (column may not exist):', tpqErr.message)
+      }
+    }
+
+    // ── Call API for scoring ───────────────────────────────────────────
     const autoRes = await fetch('/api/quiz/submit', {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    submissionId: subId,
-    answers: currentAnswers,
-    submission_time: new Date().toISOString(),
-    time_taken_seconds: duration,
-    time_per_question: timePerQuestion,
-  }),
-})
-if (!autoRes.ok) {
-  console.error('[doAutoSubmit] API submit failed:', autoRes.status, await autoRes.text())
-}
-    
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        submissionId:       subId,
+        answers:            currentAnswers,
+        submission_time:    new Date().toISOString(),
+        time_taken_seconds: duration,
+        time_per_question:  timePerQuestion,
+      }),
+    })
+    if (!autoRes.ok) {
+      console.error('[doAutoSubmit] API submit failed:', autoRes.status, await autoRes.text())
+    }
+
     // Sync submission state so the breakdown screen has the real answers
     setSubmission((prev: any) => ({
       ...prev,
-      answers: currentAnswers,
+      answers:           currentAnswers,
       time_per_question: timePerQuestion,
     }))
     setState('submitted')
   }
 
   // ── Load quiz ──────────────────────────────────────────────────────────
-
   const loadQuiz = useCallback(async () => {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    router.push(`/login?redirect=/quiz/${params.id}`)
-    return
-  }
-
-  const { data: act } = await supabase
-    .from('activities')
-    .select('*, quizzes(*, questions(*))')
-    .eq('id', params.id)
-    .single()
-
-  if (!act || act.status === 'closed') {
-    setState('closed')
-    return
-  }
-
-  setActivity(act)
-
-  const q = act.quizzes
-  setQuiz(q)
-
-  const qs = (q?.questions ?? []).sort(
-    (a: any, b: any) => a.order_index - b.order_index
-  )
-  setQuestions(qs)
-
-  const { data: existingSub } = await supabase
-    .from('submissions')
-    .select('*')
-    .eq('activity_id', params.id)
-    .eq('user_id', user.id)
-    .single()
-
-  // already submitted
-  if (existingSub?.is_complete) {
-    setSubmission(existingSub)
-    setState('submitted')
-    return
-  }
-
-  const { data: profile } = await supabase
-    .from('users')
-    .select('username')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile?.username) {
-    setState('username')
-    return
-  }
-
-  if (existingSub) {
-    setSubmission(existingSub)
-
-    // ✅ FIX: parse answers from TEXT → object
-    const parsedAnswers: Record<string, string> = (() => {
-      const raw = existingSub.answers
-      if (!raw) return {}
-      if (typeof raw === 'object') return raw
-      try { return JSON.parse(raw) } catch { return {} }
-    })()
-
-    setAnswers(parsedAnswers)
-
-    const remaining = getSecondsRemaining(
-      existingSub.start_time,
-      q.duration_minutes * 60
-    )
-
-    if (remaining <= 0) {
-      // ✅ FIX: use parsedAnswers, not raw string
-      doAutoSubmit(
-        existingSub.id,
-        parsedAnswers,
-        q.duration_minutes * 60
-      )
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      router.push(`/login?redirect=/quiz/${params.id}`)
       return
     }
 
-    setTimeLeft(remaining)
-  } else {
-    const { data: newSub } = await supabase
-      .from('submissions')
-      .insert({
-        activity_id: params.id,
-        user_id: user.id,
-        email: user.email,
-        username: profile.username,
-        start_time: new Date().toISOString(),
-      })
-      .select()
+    const { data: act } = await supabase
+      .from('activities')
+      .select('*, quizzes(*, questions(*))')
+      .eq('id', params.id)
       .single()
 
-    setSubmission(newSub)
-    setTimeLeft(q.duration_minutes * 60)
-  }
+    if (!act || act.status === 'closed') {
+      setState('closed')
+      return
+    }
 
-  setState('quiz')
-}, [params.id])
+    setActivity(act)
 
-useEffect(() => {
-  loadQuiz()
-}, [loadQuiz])
+    const q = act.quizzes
+    setQuiz(q)
 
+    const qs = (q?.questions ?? []).sort(
+      (a: any, b: any) => a.order_index - b.order_index
+    )
+    setQuestions(qs)
 
-  
+    const { data: existingSub } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('activity_id', params.id)
+      .eq('user_id', user.id)
+      .single()
+
+    // ── Already submitted — show breakdown ────────────────────────────
+    if (existingSub?.is_complete) {
+      // Parse JSON string answers from DB before storing in state
+      const parsedAnswers = parseJsonField<Record<string, string>>(existingSub.answers, {})
+      const parsedTpq     = parseJsonField<Record<string, number>>(existingSub.time_per_question, {})
+      setSubmission({
+        ...existingSub,
+        answers:           parsedAnswers,
+        time_per_question: parsedTpq,
+      })
+      setState('submitted')
+      return
+    }
+
+    const { data: profile } = await supabase
+      .from('users')
+      .select('username')
+      .eq('id', user.id)
+      .single()
+
+    if (!profile?.username) {
+      setState('username')
+      return
+    }
+
+    if (existingSub) {
+      // Parse stored answers for in-progress resume
+      const parsedAnswers = parseJsonField<Record<string, string>>(existingSub.answers, {})
+      setSubmission(existingSub)
+      setAnswers(parsedAnswers)
+
+      const remaining = getSecondsRemaining(
+        existingSub.start_time,
+        q.duration_minutes * 60
+      )
+
+      if (remaining <= 0) {
+        doAutoSubmit(existingSub.id, parsedAnswers, q.duration_minutes * 60)
+        return
+      }
+
+      setTimeLeft(remaining)
+    } else {
+      const { data: newSub } = await supabase
+        .from('submissions')
+        .insert({
+          activity_id: params.id,
+          user_id:     user.id,
+          email:       user.email,
+          username:    profile.username,
+          start_time:  new Date().toISOString(),
+        })
+        .select()
+        .single()
+
+      setSubmission(newSub)
+      setTimeLeft(q.duration_minutes * 60)
+    }
+
+    setState('quiz')
+  }, [params.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    loadQuiz()
+  }, [loadQuiz])
+
   // ── Timer ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (state !== 'quiz' || !submission) return
@@ -282,16 +307,20 @@ useEffect(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
           clearInterval(timerRef.current)
-          doAutoSubmit(submissionRef.current.id, answersRef.current, quizRef.current.duration_minutes * 60)
+          doAutoSubmit(
+            submissionRef.current.id,
+            answersRef.current,
+            quizRef.current.duration_minutes * 60
+          )
           return 0
         }
         return prev - 1
       })
     }, 1000)
     return () => clearInterval(timerRef.current)
-  }, [state, submission])
+  }, [state, submission]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── ✅ SILENT SENTINEL — DO NOT MOVE OR REFACTOR ─────────────────────
+  // ── SILENT SENTINEL (cheat detection) ─────────────────────────────────
   useEffect(() => {
     if (state !== 'quiz' || !submissionRef.current?.id) return
 
@@ -309,34 +338,32 @@ useEffect(() => {
     }
 
     const handleVisibilityChange = () => { if (document.hidden) logViolation('TAB_SWITCH') }
-    const handleBlur = () => { logViolation('WINDOW_BLUR') }
-    const handleFocus = () => { logViolation('WINDOW_FOCUS') }
-    const handleCopy = () => { logViolation('COPY') }
-    const handlePaste = () => { logViolation('PASTE') }
-    const handleContextMenu = (e: MouseEvent) => { e.preventDefault(); logViolation('RIGHT_CLICK') }
+    const handleBlur             = () => { logViolation('WINDOW_BLUR') }
+    const handleFocus            = () => { logViolation('WINDOW_FOCUS') }
+    const handleCopy             = () => { logViolation('COPY') }
+    const handlePaste            = () => { logViolation('PASTE') }
+    const handleContextMenu      = (e: MouseEvent) => { e.preventDefault(); logViolation('RIGHT_CLICK') }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('blur', handleBlur)
-    window.addEventListener('focus', handleFocus)
-    document.addEventListener('copy', handleCopy)
-    document.addEventListener('paste', handlePaste)
-    document.addEventListener('contextmenu', handleContextMenu)
+    window.addEventListener('blur',            handleBlur)
+    window.addEventListener('focus',           handleFocus)
+    document.addEventListener('copy',          handleCopy)
+    document.addEventListener('paste',         handlePaste)
+    document.addEventListener('contextmenu',   handleContextMenu)
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('blur', handleBlur)
-      window.removeEventListener('focus', handleFocus)
-      document.removeEventListener('copy', handleCopy)
-      document.removeEventListener('paste', handlePaste)
-      document.removeEventListener('contextmenu', handleContextMenu)
+      window.removeEventListener('blur',           handleBlur)
+      window.removeEventListener('focus',          handleFocus)
+      document.removeEventListener('copy',         handleCopy)
+      document.removeEventListener('paste',        handlePaste)
+      document.removeEventListener('contextmenu',  handleContextMenu)
     }
   }, [state])
-  // ── END SILENT SENTINEL ───────────────────────────────────────────────
 
-  // ── Submit ─────────────────────────────────────────────────────────────
+  // ── Manual submit ──────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (submittingRef.current) return
-    // Lock FIRST — before any await — so rapid double-clicks can't both pass the guard
     submittingRef.current = true
     setSaving(true)
 
@@ -349,57 +376,68 @@ useEffect(() => {
       }
     }
 
-    // Snapshot the map before any async op so mutations can't affect it mid-flight
     const timePerQuestion = { ...timeMapRef.current }
-    // Snapshot answers for the same reason — and for the breakdown update below
-    const finalAnswers = { ...answersRef.current }
+    const finalAnswers    = { ...answersRef.current }
+    const timeTaken       = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
 
-    const timeTaken = Math.floor((now - new Date(submission.start_time).getTime()) / 1000)
-    const sumPerQ   = Object.values(timePerQuestion).reduce((a: number, b: number) => a + b, 0)
+    // ── CRITICAL DB UPDATE: answers + completion ───────────────────────
+    // time_per_question is NOT included here — if that column doesn't exist
+    // in the schema yet, including it would cause this entire update to fail,
+    // losing the user's answers and leaving is_complete=false.
+    const { error: criticalErr } = await supabase
+      .from('submissions')
+      .update({
+        answers:            JSON.stringify(finalAnswers),
+        is_complete:        true,
+        submission_time:    new Date().toISOString(),
+        time_taken_seconds: timeTaken,
+      })
+      .eq('id', submission.id)
 
-    if (Math.abs(timeTaken - sumPerQ) > 30) {
-      console.info('[analytics] time_taken vs sum(time_per_question) mismatch', { timeTaken, sumPerQ })
+    if (criticalErr) {
+      console.error('[handleSubmit] CRITICAL update failed:', criticalErr.message)
+      // Still attempt the API call — it may succeed via adminClient
     }
 
-   await supabase.from('submissions')
-  .update({
-    answers: JSON.stringify(finalAnswers),
-    is_complete: true,
-    submission_time: new Date().toISOString(),
-    time_taken_seconds: timeTaken,
-    time_per_question: JSON.stringify(timePerQuestion),
-  })
-  .eq('id', submission.id)
+    // ── NON-CRITICAL: save time_per_question separately ────────────────
+    if (Object.keys(timePerQuestion).length > 0) {
+      const { error: tpqErr } = await supabase
+        .from('submissions')
+        .update({ time_per_question: JSON.stringify(timePerQuestion) })
+        .eq('id', submission.id)
+      if (tpqErr) {
+        console.warn('[handleSubmit] time_per_question not saved (column may not exist):', tpqErr.message)
+      }
+    }
 
-const submitRes = await fetch('/api/quiz/submit', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    submissionId: submission.id,
-    answers: finalAnswers,
-    submission_time: new Date().toISOString(),
-    time_taken_seconds: timeTaken,
-    time_per_question: timePerQuestion,
-  }),
-})
+    // ── Call API for authoritative scoring ─────────────────────────────
+    const submitRes = await fetch('/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        submissionId:       submission.id,
+        answers:            finalAnswers,
+        submission_time:    new Date().toISOString(),
+        time_taken_seconds: timeTaken,
+        time_per_question:  timePerQuestion,
+      }),
+    })
 
-if (!submitRes.ok) {
-  console.error('[handleSubmit] API submit failed:', submitRes.status, await submitRes.text())
-}
+    if (!submitRes.ok) {
+      console.error('[handleSubmit] API submit failed:', submitRes.status, await submitRes.text())
+    }
 
-                                              
-
-    // Update submission state with the live answers so the breakdown screen
-    // reads the correct data (submission was set to the initial DB row on load).
+    // Update local submission state with live answers so breakdown shows correctly
     setSubmission((prev: any) => ({
       ...prev,
-      answers: finalAnswers,
+      answers:           finalAnswers,
       time_per_question: timePerQuestion,
     }))
+    setSaving(false)
     setState('submitted')
   }
 
-  // ── Username ───────────────────────────────────────────────────────────
+  // ── Username setup ─────────────────────────────────────────────────────
   const handleSetUsername = async () => {
     const trimmed = newUsername.trim()
     if (trimmed.length < 3) { setUsernameError('At least 3 characters.'); return }
@@ -419,8 +457,7 @@ if (!submitRes.ok) {
   const mins     = Math.floor(timeLeft / 60)
   const secs     = (timeLeft % 60).toString().padStart(2, '0')
 
-  // ── State screens ──────────────────────────────────────────────────────
-
+  // ── Loading ────────────────────────────────────────────────────────────
   if (state === 'loading') return (
     <div style={{ minHeight: '100vh', background: '#020617', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ textAlign: 'center' }}>
@@ -433,12 +470,11 @@ if (!submitRes.ok) {
 
   // ── SUBMITTED: full per-question breakdown ─────────────────────────────
   if (state === 'submitted') {
-    const subAnswers: Record<string, string> =
-      (submission?.answers && typeof submission.answers === 'object')
-        ? submission.answers : {}
-    const timeMap: Record<string, number> =
-      (submission?.time_per_question && typeof submission.time_per_question === 'object')
-        ? submission.time_per_question : {}
+    // submission.answers may be a JS object (just submitted) OR a JSON string
+    // (loaded from DB on refresh). Always parse safely.
+    const subAnswers = parseJsonField<Record<string, string>>(submission?.answers, {})
+    const timeMap    = parseJsonField<Record<string, number>>(submission?.time_per_question, {})
+
     const finalScore  = submission?.final_score ?? null
     const hasBreakdown = questions.length > 0
 
@@ -529,7 +565,6 @@ if (!submitRes.ok) {
                   const notAnswered  = !rawAnswer && rawAnswer !== '0'
                   const timeSpent    = timeMap[qItem.id] ?? 0
 
-                  // Left border colour: green = correct, amber = not answered, red = wrong
                   const borderLeft = notAnswered
                     ? '3px solid rgba(245,158,11,0.5)'
                     : isCorrect
@@ -569,16 +604,9 @@ if (!submitRes.ok) {
                           </span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                          {/* Status badge */}
-                          <span
-  title={notAnswered ? 'Not answered' : isCorrect ? 'Correct' : 'Incorrect'}
-  style={{
-    fontSize: '1rem',
-  }}
->
+                          <span title={notAnswered ? 'Not answered' : isCorrect ? 'Correct' : 'Incorrect'} style={{ fontSize: '1rem' }}>
                             {notAnswered ? '⚪' : isCorrect ? '✅' : '❌'}
                           </span>
-                          {/* Time spent */}
                           <span style={{
                             color: '#475569', fontSize: '0.72rem',
                             background: 'rgba(255,255,255,0.04)',
@@ -592,14 +620,7 @@ if (!submitRes.ok) {
                       </div>
 
                       {/* Answer comparison */}
-                      <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr',
-                        gap: 8,
-                      }}
-                        className="breakdown-answer-grid"
-                      >
-                        {/* User's answer */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }} className="breakdown-answer-grid">
                         <div style={{
                           background: 'rgba(255,255,255,0.02)',
                           border: `1px solid ${notAnswered ? 'rgba(245,158,11,0.15)' : isCorrect ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
@@ -614,11 +635,9 @@ if (!submitRes.ok) {
                             fontStyle: notAnswered ? 'italic' : 'normal',
                             wordBreak: 'break-word',
                           }}>
-                            {notAnswered ? '' : (isCorrect ? '✓ ' : '✗ ')}{userDisplay}
+                            {notAnswered ? 'Not Answered' : (isCorrect ? '✓ ' : '✗ ')}{notAnswered ? '' : userDisplay}
                           </p>
                         </div>
-
-                        {/* Correct answer */}
                         <div style={{
                           background: 'rgba(34,197,94,0.04)',
                           border: '1px solid rgba(34,197,94,0.12)',
@@ -633,7 +652,7 @@ if (!submitRes.ok) {
                         </div>
                       </div>
 
-                      {/* MCQ: show all options for context */}
+                      {/* MCQ: show all options */}
                       {qItem.type?.includes('mcq') && Array.isArray(qItem.options) && qItem.options.length > 0 && (
                         <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           {qItem.options.map((opt: string, optIdx: number) => {
@@ -669,7 +688,6 @@ if (!submitRes.ok) {
               </div>
             </>
           ) : (
-            /* Fallback when questions aren't in state (edge case) */
             <div style={{ textAlign: 'center', padding: '3rem', color: '#475569' }}>
               <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
               <p style={{ fontSize: '1rem', color: '#e2e8f0', marginBottom: 8, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700 }}>Quiz Submitted!</p>
@@ -793,11 +811,8 @@ if (!submitRes.ok) {
                     const idxStr = String(idx)
                     const selected = answers[q.id] === idxStr
                     return (
-                      
                       <button key={idx} onClick={() => updateAnswer(q.id, idxStr)}
-                                                                 
-                                                                 
-                                                                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 10, background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)', border: selected ? '1.5px solid rgba(99,102,241,0.55)' : '1.5px solid rgba(148,163,184,0.1)', color: selected ? '#e2e8f0' : '#94a3b8', fontSize: '0.95rem', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s', width: '100%' }}>
+                        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 10, background: selected ? 'rgba(99,102,241,0.15)' : 'rgba(2,6,23,0.5)', border: selected ? '1.5px solid rgba(99,102,241,0.55)' : '1.5px solid rgba(148,163,184,0.1)', color: selected ? '#e2e8f0' : '#94a3b8', fontSize: '0.95rem', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s', width: '100%' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: '50%', flexShrink: 0, background: selected ? '#6366f1' : 'rgba(148,163,184,0.1)', color: selected ? '#fff' : '#64748b', fontSize: '0.75rem', fontWeight: 700, transition: 'all 0.15s' }}>{String.fromCharCode(65 + idx)}</span>
                         {opt}
                       </button>
@@ -807,12 +822,12 @@ if (!submitRes.ok) {
                 </div>
               ) : (
                 <textarea value={answers[q.id] || ''}
-                  
                   onChange={e => updateAnswer(q.id, e.target.value)}
-
-                                           
-                                           
-                                           placeholder="Type your answer here…" rows={4} style={{ width: '100%', resize: 'vertical', background: 'rgba(2,6,23,0.7)', border: '1.5px solid rgba(148,163,184,0.1)', borderRadius: 12, padding: '12px 14px', color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6, outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s', fontFamily: 'inherit' }} onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.55)'; e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)' }} onBlur={e => { e.target.style.borderColor = 'rgba(148,163,184,0.1)'; e.target.style.boxShadow = 'none' }} />
+                  placeholder="Type your answer here…" rows={4}
+                  style={{ width: '100%', resize: 'vertical', background: 'rgba(2,6,23,0.7)', border: '1.5px solid rgba(148,163,184,0.1)', borderRadius: 12, padding: '12px 14px', color: '#f1f5f9', fontSize: '0.95rem', lineHeight: 1.6, outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s', fontFamily: 'inherit' }}
+                  onFocus={e => { e.target.style.borderColor = 'rgba(99,102,241,0.55)'; e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)' }}
+                  onBlur={e => { e.target.style.borderColor = 'rgba(148,163,184,0.1)'; e.target.style.boxShadow = 'none' }}
+                />
               )}
             </div>
 
