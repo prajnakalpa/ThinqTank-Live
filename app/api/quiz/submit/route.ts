@@ -18,7 +18,10 @@ function safeTime(value: unknown): number {
   return Math.min(Math.floor(n), MAX_QUESTION_TIME_SECONDS)
 }
 
-/** answers and time_per_question are TEXT columns — parse defensively */
+/**
+ * Safely parse a TEXT column that might be a JSON string or already an object.
+ * This handles Supabase TEXT columns that store JSON.
+ */
 function parseJsonField<T>(raw: unknown, fallback: T): T {
   if (raw === null || raw === undefined) return fallback
   if (typeof raw === 'object') return raw as T
@@ -37,6 +40,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing submissionId' }, { status: 400 })
     }
 
+    // ── Parse request body ──────────────────────────────────────────────
     const clientAnswers: Record<string, string> =
       body.answers && typeof body.answers === 'object' ? body.answers : {}
     const clientSubmissionTime: string =
@@ -56,6 +60,7 @@ export async function POST(req: Request) {
       console.warn('[submit/route] createAdminClient failed:', (e as Error).message)
     }
 
+    // ── Fetch submission + questions ────────────────────────────────────
     const { data: sub, error } = await userClient
       .from('submissions')
       .select('*, activities(id, quizzes(id, questions(*)))')
@@ -67,6 +72,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Submission not found' }, { status: 404 })
     }
 
+    // Already fully scored — return cached result
     if (sub.is_complete === true && sub.final_score != null) {
       return NextResponse.json({
         score:      sub.final_score,
@@ -86,6 +92,7 @@ export async function POST(req: Request) {
 
     const { total } = evaluateSubmission(questions, answersToEvaluate)
 
+    // ── Cheat violation count ───────────────────────────────────────────
     let violations = 0
     if (adminClient) {
       const { data: logs } = await adminClient
@@ -94,23 +101,7 @@ export async function POST(req: Request) {
     }
     const cheatFlag = violations >= 6
 
-    // time_per_question is TEXT — parse back to object before using
-    const parsedSubTpq = parseJsonField<Record<string, number>>(sub.time_per_question, {})
-
-    const storedTimePerQuestion: Record<string, number> =
-      Object.keys(parsedSubTpq).length > 0 ? parsedSubTpq : clientTimePerQuestion
-
-    // Only write time_per_question when DB has none yet — stringify for TEXT column
-    const tpqPatch =
-      Object.keys(storedTimePerQuestion).length > 0 && !sub.time_per_question
-        ? { time_per_question: JSON.stringify(storedTimePerQuestion) }
-        : {}
-
-    const tpqPatchForDegraded =
-      Object.keys(clientTimePerQuestion).length > 0 && !sub.time_per_question
-        ? { time_per_question: JSON.stringify(clientTimePerQuestion) }
-        : {}
-
+    // ── Degraded path (no service role key) ────────────────────────────
     if (!adminClient) {
       const { error: answersErr } = await userClient
         .from('submissions')
@@ -118,7 +109,7 @@ export async function POST(req: Request) {
           answers:            JSON.stringify(answersToEvaluate),
           submission_time:    clientSubmissionTime,
           time_taken_seconds: clientTimeTaken,
-          ...tpqPatchForDegraded,
+          is_complete:        true,
         })
         .eq('id', submissionId)
 
@@ -134,10 +125,15 @@ export async function POST(req: Request) {
       )
     }
 
+    // ── CRITICAL UPDATE: answers + score + completion ───────────────────
+    // NOTE: time_per_question is intentionally excluded here.
+    // If that column doesn't exist yet in the DB schema, including it would
+    // cause the ENTIRE update to fail, leaving is_complete=false and losing
+    // the user's answers. We save it separately below as a non-critical step.
     const { error: updateError } = await adminClient
       .from('submissions')
       .update({
-        answers:            JSON.stringify(answersToEvaluate),  // TEXT column
+        answers:            JSON.stringify(answersToEvaluate),
         auto_score:         total,
         final_score:        total,
         is_complete:        true,
@@ -145,17 +141,27 @@ export async function POST(req: Request) {
         time_taken_seconds: clientTimeTaken,
         cheat_violations:   violations,
         cheat_flag:         cheatFlag,
-        ...tpqPatch,  // already stringified above
       })
       .eq('id', submissionId)
-      .select()
-      .single()
 
     if (updateError) {
       console.error('[submit/route] CRITICAL — submission update failed:', updateError.message)
       return NextResponse.json({ error: 'Failed to save submission' }, { status: 500 })
     }
 
+    // ── NON-CRITICAL: save time_per_question (column may not exist yet) ─
+    // Failure here does NOT affect the score or completion status.
+    if (Object.keys(clientTimePerQuestion).length > 0 && !sub.time_per_question) {
+      const { error: tpqErr } = await adminClient
+        .from('submissions')
+        .update({ time_per_question: JSON.stringify(clientTimePerQuestion) })
+        .eq('id', submissionId)
+      if (tpqErr) {
+        console.warn('[submit/route] time_per_question not saved (column may not exist yet):', tpqErr.message)
+      }
+    }
+
+    // ── NON-CRITICAL: analytics + leaderboard ──────────────────────────
     try {
       await rebuildLeaderboard(adminClient, sub.activity_id)
 
@@ -197,7 +203,7 @@ export async function POST(req: Request) {
         )
       }
     } catch (adminErr: any) {
-      console.error('[submit/route] admin ops failed (non-critical):', adminErr.message)
+      console.error('[submit/route] analytics/leaderboard ops failed (non-critical):', adminErr.message)
     }
 
     return NextResponse.json({ score: total, violations, cheatFlag })
