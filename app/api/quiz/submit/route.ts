@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     // ── Step 1: Fetch the submission (flat, no joins) ───────────────────
     const { data: sub, error: subErr } = await adminClient
       .from('submissions')
-      .select('id, activity_id, user_id, answers, is_complete, final_score, cheat_violations, cheat_flag, time_per_question')
+      .select('id, activity_id, user_id, answers, is_complete, final_score, auto_score, cheat_violations, cheat_flag, time_per_question')
       .eq('id', submissionId)
       .single()
 
@@ -54,8 +54,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Submission not found' }, { status: 404 })
     }
 
-    // Already fully scored — idempotent
-    if (sub.is_complete === true && sub.final_score != null) {
+    // Already fully scored — idempotent.
+    // CRITICAL FIX: Use auto_score not final_score for this check.
+    // final_score has a DB DEFAULT of 0, so `final_score != null` is ALWAYS
+    // true even for brand-new unscored rows. auto_score is only written by
+    // this API, so it's null until evaluation has actually run.
+    // The previous check caused: client sets is_complete=true before API call
+    // -> API sees is_complete=true + final_score=0 -> returns cached 0 forever.
+    if (sub.is_complete === true && sub.auto_score != null) {
       return NextResponse.json({
         score:      sub.final_score,
         violations: sub.cheat_violations ?? 0,
