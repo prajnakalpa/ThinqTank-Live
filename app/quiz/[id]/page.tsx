@@ -185,15 +185,29 @@ export default function QuizPage({ params }: Props) {
         time_per_question:  timePerQuestion,
       }),
     })
-    if (!autoRes.ok) {
-      console.error('[doAutoSubmit] API submit failed:', autoRes.status, await autoRes.text())
+
+    // ── READ the score back from API response and apply to UI ──────────
+    // BUG FIX: previously we never read the response, so final_score was
+    // always the stale pre-submission value (null/0) from the initial DB
+    // load. The DB had the correct score but the UI never showed it.
+    let apiScore: number | null = null
+    if (autoRes.ok) {
+      try {
+        const resData = await autoRes.json()
+        apiScore = typeof resData.score === 'number' ? resData.score : null
+      } catch (e) {
+        console.error('[doAutoSubmit] failed to parse API response:', e)
+      }
+    } else {
+      console.error('[doAutoSubmit] API submit failed:', autoRes.status)
     }
 
-    // Sync submission state so the breakdown screen has the real answers
+    // Sync submission state so the breakdown screen has the real answers + score
     setSubmission((prev: any) => ({
       ...prev,
       answers:           currentAnswers,
       time_per_question: timePerQuestion,
+      final_score:       apiScore,   // ← the fix: show the real score immediately
     }))
     setState('submitted')
   }
@@ -423,15 +437,28 @@ export default function QuizPage({ params }: Props) {
       }),
     })
 
-    if (!submitRes.ok) {
-      console.error('[handleSubmit] API submit failed:', submitRes.status, await submitRes.text())
+    // ── READ the score back from API response and apply to UI ──────────
+    // BUG FIX: previously we never read the response, so final_score was
+    // always the stale pre-submission value (null/0) from the initial DB
+    // load. The DB had the correct score but the UI never showed it.
+    let apiScore: number | null = null
+    if (submitRes.ok) {
+      try {
+        const resData = await submitRes.json()
+        apiScore = typeof resData.score === 'number' ? resData.score : null
+      } catch (e) {
+        console.error('[handleSubmit] failed to parse API response:', e)
+      }
+    } else {
+      console.error('[handleSubmit] API submit failed:', submitRes.status)
     }
 
-    // Update local submission state with live answers so breakdown shows correctly
+    // Update local submission state with real answers + score
     setSubmission((prev: any) => ({
       ...prev,
       answers:           finalAnswers,
       time_per_question: timePerQuestion,
+      final_score:       apiScore,   // ← the fix: show the real score immediately
     }))
     setSaving(false)
     setState('submitted')
