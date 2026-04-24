@@ -152,7 +152,10 @@ export default function QuizPage({ params }: Props) {
       .from('submissions')
       .update({
         answers:            JSON.stringify(currentAnswers),
-        is_complete:        true,
+        // NOTE: is_complete intentionally NOT set here.
+        // Setting is_complete=true before the API runs triggers the idempotency
+        // check (is_complete=true + final_score=0 default) → API returns 0.
+        // Only the API route sets is_complete=true, together with the real score.
         submission_time:    new Date().toISOString(),
         time_taken_seconds: duration,
       })
@@ -402,7 +405,10 @@ export default function QuizPage({ params }: Props) {
       .from('submissions')
       .update({
         answers:            JSON.stringify(finalAnswers),
-        is_complete:        true,
+        // NOTE: is_complete intentionally NOT set here.
+        // Setting is_complete=true before the API runs triggers the idempotency
+        // check (is_complete=true + final_score=0 default) → API returns 0.
+        // Only the API route sets is_complete=true, together with the real score.
         submission_time:    new Date().toISOString(),
         time_taken_seconds: timeTaken,
       })
