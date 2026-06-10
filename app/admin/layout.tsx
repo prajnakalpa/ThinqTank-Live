@@ -62,7 +62,7 @@ const pathname       = headers().get('x-pathname') ?? ''
   return (
     <div className="admin-shell">
       {/* All sidebar UI lives in the client component */}
-      <AdminSidebar initials={initials} email={user.email ?? ''} />
+      <AdminSidebar initials={initials} email={user?.email ?? ''} />
 
       {/* Main content — margin-left handled entirely by CSS class */}
       <main className="admin-main">
