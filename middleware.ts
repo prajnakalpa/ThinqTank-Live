@@ -3,8 +3,6 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
-// Forward pathname as a request header so Server Components
-// can access it via headers().get('x-pathname')
 const requestHeaders = new Headers(request.headers)
 requestHeaders.set('x-pathname', request.nextUrl.pathname)
 
