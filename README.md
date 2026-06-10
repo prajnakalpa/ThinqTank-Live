@@ -1,4 +1,3 @@
-# ThinqTank-Live
 # ThinqTank Live
 
 A competitive, timed quiz platform. Students sign in with a one-time email code, take weekly quizzes, and are ranked on real-time leaderboards. Admins manage activities, questions, scoring, announcements, and site content from a protected dashboard.
