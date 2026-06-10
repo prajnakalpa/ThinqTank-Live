@@ -23,27 +23,41 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode
 }) {
-  /* ── Auth & role check ─────────────────────────────────────────────────── */
+const pathname       = headers().get('x-pathname') ?? ''
+  const masterEnabled  = !!process.env.ADMIN_MASTER_PASSWORD
+  const masterVerified =
+    masterEnabled && cookies().get('admin_master_verified')?.value === '1'
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login?redirect=/admin')
 
-  const { data: profile } = await supabase
-    .from('users').select('role').eq('id', user.id).single()
-  if (profile?.role !== 'admin') redirect('/')
+  let role: string | undefined
+  if (user) {
+    const { data: profile } = await supabase
+      .from('users').select('role').eq('id', user.id).single()
+    role = profile?.role
+  }
+  const isSupabaseAdmin = !!user && role === 'admin'
 
-  /* ── Master-password gate ──────────────────────────────────────────────── */
-  const masterPassword = process.env.ADMIN_MASTER_PASSWORD
-  if (masterPassword) {
-    const cookieStore = cookies()
-    const verified = cookieStore.get('admin_master_verified')?.value
-    const pathname = headers().get('x-pathname') ?? ''
-    if (!pathname.startsWith('/admin/unlock') && verified !== '1') {
-      redirect('/admin/unlock')
+  // Access is granted by EITHER a verified master password (break-glass)
+  // OR a signed-in Supabase admin. Supabase role checks are fully preserved
+  // for the normal login path.
+  const hasAccess = masterVerified || isSupabaseAdmin
+
+  if (!hasAccess) {
+    if (user && role !== 'admin') {
+      redirect('/')                               // signed-in non-admin (unchanged)
     }
+    if (masterEnabled && pathname.startsWith('/admin/unlock')) {
+      return <>{children}</>                       // render the unlock form (no loop)
+    }
+    if (masterEnabled) {
+      redirect('/admin/unlock')                    // need master factor
+    }
+    redirect('/login?redirect=/admin')             // master disabled → pure Supabase gate
   }
 
-  const initials = user.email?.slice(0, 2).toUpperCase() ?? 'AD'
+  const initials = user?.email?.slice(0, 2).toUpperCase() ?? 'AD'
 
   return (
     <div className="admin-shell">
