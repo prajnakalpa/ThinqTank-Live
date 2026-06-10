@@ -3,51 +3,54 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
--  // IMPORTANT: start with a fresh response built from the request
--  // so that refreshed session cookies can be written back to it
--  let supabaseResponse = NextResponse.next({ request })
-+  // Forward the current pathname as a REQUEST header so Server Component
-+  // layouts can read it via headers().get('x-pathname').
-+  const requestHeaders = new Headers(request.headers)
-+  requestHeaders.set('x-pathname', request.nextUrl.pathname)
-+
-+  let supabaseResponse = NextResponse.next({
-+    request: { headers: requestHeaders },
-+  })
+// Forward pathname as a request header so Server Components
+// can access it via headers().get('x-pathname')
+const requestHeaders = new Headers(request.headers)
+requestHeaders.set('x-pathname', request.nextUrl.pathname)
 
-   const supabase = createServerClient(
-     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-     {
-       cookies: {
-         getAll() {
-           return request.cookies.getAll()
-         },
-         setAll(cookiesToSet) {
-           cookiesToSet.forEach(({ name, value }) =>
-             request.cookies.set(name, value)
-           )
--          supabaseResponse = NextResponse.next({ request })
-+          supabaseResponse = NextResponse.next({
-+            request: { headers: requestHeaders },
-+          })
-           cookiesToSet.forEach(({ name, value, options }) =>
-             supabaseResponse.cookies.set(name, value, options)
-           )
-         },
-       },
-     }
-   )
+let supabaseResponse = NextResponse.next({
+request: {
+headers: requestHeaders,
+},
+})
 
-   await supabase.auth.getUser()
--
--  supabaseResponse.headers.set('x-pathname', request.nextUrl.pathname)
+const supabase = createServerClient(
+process.env.NEXT_PUBLIC_SUPABASE_URL!,
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+{
+cookies: {
+getAll() {
+return request.cookies.getAll()
+},
+setAll(cookiesToSet) {
+cookiesToSet.forEach(({ name, value }) =>
+request.cookies.set(name, value)
+)
 
-   return supabaseResponse
- }
+```
+      supabaseResponse = NextResponse.next({
+        request: {
+          headers: requestHeaders,
+        },
+      })
+
+      cookiesToSet.forEach(({ name, value, options }) =>
+        supabaseResponse.cookies.set(name, value, options)
+      )
+    },
+  },
+}
+```
+
+)
+
+await supabase.auth.getUser()
+
+return supabaseResponse
+}
 
 export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
-  ],
+matcher: [
+'/((?!_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+],
 }
