@@ -32,6 +32,9 @@ A competitive, timed quiz platform. Students sign in with a one-time email code,
 20. [Backup & Recovery](#20-backup--recovery)
 21. [Release Checklist](#21-release-checklist)
 22. [Ownership & Access Matrix](#22-ownership--access-matrix)
+23. [Feature Release History](#23-feature-release-history)
+24. [Recent Changes](#24-recent-changes)
+25. [Remaining Open Items](#remaining-open-items)
 
 ---
 
@@ -57,6 +60,7 @@ A single Next.js 14 App-Router application deployed on Vercel. The browser and s
 - Automatic scoring engine with `strict` / `medium` / `loose` matching for free-text answers, plus MCQ.
 - Real-time leaderboards (per-quiz and overall) and per-activity / per-question analytics.
 - Admin CMS for homepage content and logo, announcements, and CSV score import / score recalculation.
+- **Per-question result analytics** (your time vs. historical average, correct %, Easy/Medium/Hard difficulty) and a **peer benchmark** (average score, percentile, participants beaten, top-10% score) on the result screen — both reuse existing data, no schema changes.
 
 ---
 
@@ -212,6 +216,10 @@ Student opens /quiz/[id]
         └─ updateAnalytics(activity_id)
   → results breakdown rendered client-side
 ```
+
+**Result-screen analytics (added post-audit, no schema changes):**
+- **Per-question analytics** — each question shows the candidate's time spent, historical average time, historical correct %, and a difficulty indicator (Easy / Medium / Hard). Source: `submissions.time_per_question` (your time) + `analytics.question_stats` (avg time, accuracy/difficulty).
+- **Peer benchmark** — average score, your percentile, participants beaten, and the top-10% score. Source: `leaderboard` (per-activity scores) + `submission.final_score`.
 
 **Scoring engine (`lib/evaluation.ts`):**
 - `normalize()` lowercases, strips non-alphanumerics, collapses whitespace.
@@ -533,12 +541,12 @@ Findings from the audit, ranked by severity. "Exploitability" reflects how easil
 
 | Pri | Finding | Impact | Exploitability | Recommended fix | Files / policies |
 |---|---|---|---|---|---|
-| **Critical** | `users_self_update` has no `WITH CHECK` | Any authenticated student can self-promote to `admin` and gain full admin + service-equivalent data access | High — single authenticated PostgREST `UPDATE` on own row | Add `WITH CHECK` forbidding `role` change; restrict role mutation to an admin/service path | RLS policy `users_self_update` on `public.users` |
-| **High** | `/api/quiz/log-event` is unauthenticated | Anyone can insert `quiz_logs` for any `submissionId`, inflating `cheat_violations`/`cheat_flag` and falsely flagging students (integrity/data-trust) | High — unauthenticated `POST` | Require `getUser()`; verify the submission belongs to the caller; validate `type` | `app/api/quiz/log-event/route.ts`, table `quiz_logs` |
-| **Medium** | Master cookie not revoked on sign-out; `path=/admin`; plain `!==` compare | Lingering 8h admin access after logout; timing side-channel on password compare | Medium — requires prior valid master unlock or local cookie access | Clear `admin_master_verified` on sign-out; constant-time compare; reconsider scope | `app/api/admin/verify-master/route.ts`, sign-out handler in `components/layout/Navbar.tsx` |
-| **Medium** | Master/admin gate logic bugs (see Known Issues #1–2) | Admin area can loop or refuse legitimate access; "bypass" label misleads operators | Medium — functional, not directly an attacker vector | Apply the two-file patch; align UI copy to chosen model | `middleware.ts`, `app/admin/layout.tsx` |
-| **Low** | `analytics` / `leaderboard` world-readable (`SELECT true`) | Public exposure of aggregate/ranking data (currently intended) | Low — by design | Re-evaluate before adding any sensitive column to these tables | RLS `analytics_public`, `leaderboard_public` |
-| **Low** | `NEXT_PUBLIC_*` secrets risk | Accidentally prefixing a secret with `NEXT_PUBLIC_` would inline it into the browser bundle | Low — process discipline | Code review check; never prefix `SERVICE_ROLE_KEY`/`ADMIN_MASTER_PASSWORD` | Env var setup, `lib/supabase/admin.ts` |
+| ~~**Critical**~~ ✅ **RESOLVED** | `users_self_update` had no `WITH CHECK` (self-promotion to `admin`) | Account takeover / privilege escalation | — (fixed) | Policy rewritten with `WITH CHECK` blocking `role` changes (role mutation only via admin/service path) | RLS `users_self_update` on `public.users` |
+| ~~**High**~~ ✅ **RESOLVED** | `/api/quiz/log-event` was unauthenticated | Cheat-event inflation / false flags | — (fixed) | Added `getUser()` auth + submission-ownership check before insert | `app/api/quiz/log-event/route.ts`, `quiz_logs` |
+| ~~**Medium**~~ ✅ **RESOLVED** | Master/admin gate logic bugs (unlock loop; master couldn't unlock) | Admin lockout / loops | — (fixed) | Two-file patch (see Known Issues #1–2) | `middleware.ts`, `app/admin/layout.tsx` |
+| **Low** | Master cookie not cleared on sign-out; `path=/admin` | Lingering ≤8h admin access after logout | Medium — requires prior valid master unlock | Clear `admin_master_verified` on sign-out (not implemented) | `verify-master/route.ts`, sign-out handler |
+| **Low** | `analytics` / `leaderboard` world-readable (`SELECT true`) | Public exposure of aggregate/ranking data (intended) | Low — by design | Re-evaluate before adding sensitive columns | RLS `analytics_public`, `leaderboard_public` |
+| **Low** | `NEXT_PUBLIC_*` secrets risk | Secret inlined into browser bundle if mis-prefixed | Low — process discipline | Code-review check | Env setup, `lib/supabase/admin.ts` |
 
 ---
 
@@ -600,13 +608,13 @@ Push to the production branch (or merge a PR) → Vercel builds with `next build
 
 > These are present in the repository code as audited and directly affect the admin/master flow. They are documented here so a new owner doesn't mistake them for environment problems.
 
-1. **`x-pathname` is set on the middleware response, but read from the request.** `middleware.ts` does `supabaseResponse.headers.set('x-pathname', …)`, while `app/admin/layout.tsx` reads `headers().get('x-pathname')` — which returns the *request* headers. The value is therefore always empty, so the unlock-page self-exemption never fires and `/admin/unlock` can redirect-loop. **Fix:** forward the pathname as a *request* header via `NextResponse.next({ request: { headers } })`.
+1. ✅ **RESOLVED — `x-pathname` request/response mismatch (admin unlock redirect loop).** `middleware.ts` now forwards the pathname as a *request* header via `NextResponse.next({ request: { headers } })`, so `app/admin/layout.tsx` reads it correctly and the `/admin/unlock` loop no longer occurs. *(Files: `middleware.ts`, `app/admin/layout.tsx`.)*
 
-2. **Master password cannot unlock on its own.** `app/admin/layout.tsx` runs `getUser()` + role redirect *before* checking the `admin_master_verified` cookie, so a master-only visitor is redirected to `/login` before the cookie is consulted — contradicting the "Bypasses Supabase auth" label. **Fix (design decision required):** treat the master cookie as a valid gate (access if `master_verified` **OR** Supabase admin), or formally make it a second factor and correct the UI copy.
+2. ✅ **RESOLVED — master password could not unlock on its own.** `app/admin/layout.tsx` now treats a verified `admin_master_verified` cookie as a valid gate (access if master-verified **OR** Supabase admin), aligning behavior with the "break-glass" intent. *(Files: `app/admin/layout.tsx`.)*
 
-3. **Master cookie persistence.** `admin_master_verified` (8h) is not cleared on sign-out and is path-scoped to `/admin`.
+3. **Master cookie cleanup on sign-out** — Known improvement opportunity (low priority, not implemented). `admin_master_verified` (8h, `path=/admin`) is not cleared on sign-out. See [Remaining Open Items](#remaining-open-items).
 
-A minimal two-file patch (middleware + admin layout) resolves issues 1 and 2 without changing the architecture or weakening RLS. Coordinate the intended security model (break-glass vs. second factor) before applying.
+Issues 1–2 were resolved by a minimal two-file patch (middleware + admin layout) without architectural changes or weakening RLS.
 
 > **Active vs. resolved:** the three items above are *active* in the audited code. Several other defects (silent zero scores, admin unable to see answers, password-reset redirect path) have already been **resolved** and are preserved as institutional memory in [Production Incident History](#19-production-incident-history) so they are not reintroduced.
 
@@ -698,20 +706,20 @@ Verified from in-code comments, fix markers, and current logic. Preserved so res
 
 ### Incident #1 — Admin unlock redirect loop
 - **Symptoms:** `/admin/unlock` redirects to itself; admins can't reach the unlock form.
-- **Root cause:** The unlock-page self-exemption depends on `x-pathname`, which is always empty (see #2), so the guard never matches.
-- **Resolution:** Pending — forward `x-pathname` correctly (see #2 fix). *(Active — Known Issues #1.)*
+- **Root cause:** The unlock-page self-exemption depends on `x-pathname`, which was always empty (see #2), so the guard never matched.
+- **Resolution:** ✅ Fixed — `x-pathname` now forwarded as a request header (see #2).
 - **Files:** `middleware.ts`, `app/admin/layout.tsx`.
 
 ### Incident #2 — `x-pathname` middleware bug
 - **Symptoms:** Layout logic that branches on the current path never triggers.
-- **Root cause:** Middleware sets `x-pathname` on the **response**; `headers()` in a Server Component reads **request** headers, so the value is never visible.
-- **Resolution:** Pending — set it as a request header via `NextResponse.next({ request: { headers } })`. *(Active — Known Issues #1.)*
+- **Root cause:** Middleware set `x-pathname` on the **response**; `headers()` in a Server Component reads **request** headers, so the value was never visible.
+- **Resolution:** ✅ Fixed — set as a request header via `NextResponse.next({ request: { headers } })`.
 - **Files:** `middleware.ts`.
 
 ### Incident #3 — Master-password flow can't unlock
 - **Symptoms:** Correct master password "reloads" back to login; master-only access impossible.
-- **Root cause:** `app/admin/layout.tsx` enforces `getUser()`+role before consulting `admin_master_verified`, so a master-only visitor is bounced to `/login`. UI copy ("Bypasses Supabase auth") disagrees with behavior.
-- **Resolution:** Pending — accept the master cookie as a valid gate, or define it as a true second factor and fix copy. *(Active — Known Issues #2.)*
+- **Root cause:** `app/admin/layout.tsx` enforced `getUser()`+role before consulting `admin_master_verified`, bouncing master-only visitors to `/login`.
+- **Resolution:** ✅ Fixed — master cookie now accepted as a valid gate (master-verified OR Supabase admin).
 - **Files:** `app/admin/layout.tsx`, `app/(auth)/login/page.tsx`, `app/api/admin/verify-master/route.ts`.
 
 ### Incident #4 — Permanent zero score ("cached 0 forever")
@@ -749,6 +757,18 @@ Verified from in-code comments, fix markers, and current logic. Preserved so res
 - **Root cause:** Inline `left`/`marginLeft` styles couldn't be overridden by CSS media queries.
 - **Resolution:** ✅ Fixed — CSS-class-controlled positioning; identical SSR/client render.
 - **Files:** `app/admin/layout.tsx`, `components/admin/AdminSidebar.tsx`, `app/globals.css`.
+
+### Incident #10 — RLS privilege escalation (self-promotion to admin)
+- **Symptoms:** A signed-in student could set their own `role='admin'` via a direct PostgREST `UPDATE`.
+- **Root cause:** `users_self_update` used `USING (auth.uid()=id)` with no `WITH CHECK`, leaving `role` unprotected on the self-updatable row.
+- **Resolution:** ✅ Fixed — policy rewritten with a `WITH CHECK` that blocks `role` changes (role unchanged for self-update); admin role changes go through the admin/service path.
+- **Files / policies:** RLS `users_self_update` on `public.users`.
+
+### Incident #11 — Quiz log-event spoofing
+- **Symptoms:** Anyone could POST to `/api/quiz/log-event` for any `submissionId`, inflating `cheat_violations`/`cheat_flag` and falsely flagging students.
+- **Root cause:** Route used the service-role client with no authentication and no ownership/existence check.
+- **Resolution:** ✅ Fixed — added `getUser()` authentication and a submission-ownership check (owner-only) before inserting; unauthenticated/non-owner requests rejected.
+- **Files:** `app/api/quiz/log-event/route.ts`, table `quiz_logs`.
 
 ---
 
@@ -850,3 +870,40 @@ Who owns/administers each asset and where access is managed. Specific account ho
 ---
 
 *End of document. Sections explicitly marked "Not verified from available sources" require confirmation in the Supabase and Vercel dashboards before being relied upon for production decisions.*
+
+---
+
+## 23. Feature Release History
+
+| Date / Batch | Feature | Files | Data source | Schema change |
+|---|---|---|---|---|
+| Post-audit | Per-question result analytics (your time, avg time, correct %, difficulty) | `app/quiz/[id]/page.tsx` | `submissions.time_per_question`, `analytics.question_stats` | None |
+| Post-audit | Peer benchmark (avg score, percentile, participants beaten, top-10% score) | `app/quiz/[id]/page.tsx` | `leaderboard`, `submission.final_score` | None |
+
+> Not shipped (blocked by required schema changes): section-based analytics and class-wise leaderboard — no `section`/`class` columns exist; deferred.
+
+---
+
+## 24. Recent Changes
+
+**Security fixes completed**
+- ✅ RLS privilege escalation closed — `users_self_update` now has a `WITH CHECK` blocking self-promotion to `admin`.
+- ✅ Quiz log-event spoofing closed — `/api/quiz/log-event` now requires authentication and verifies submission ownership before inserting.
+- ✅ Admin unlock redirect loop / master-password gate fixed — `x-pathname` forwarded as a request header; master cookie accepted as a valid gate (two-file patch in `middleware.ts` + `app/admin/layout.tsx`).
+
+**Analytics features added**
+- ✅ Per-question analytics on the result screen.
+- ✅ Peer benchmark on the result screen.
+
+---
+
+## Remaining Open Items
+
+Concise list of what is still outstanding after the post-audit fixes.
+
+- **Admin logout cookie cleanup** — *Known improvement opportunity (low priority, not implemented).* `admin_master_verified` (8h, `path=/admin`) is not cleared on sign-out, so master access can linger after logout. Fix: clear the cookie via a small server route called from the sign-out handler.
+- **`analytics` / `leaderboard` world-readable** (Low, by design) — re-evaluate only if a sensitive column is added.
+- **Process gaps** (unchanged) — no automated tests/linter/CI; no committed SQL migrations; no `.env.local.example`.
+- **Unverified dashboard items** — Vercel project settings, Supabase Auth/backup config, and ownership/account holders remain marked "Not verified from available sources."
+
+*Resolved items (RLS escalation, log-event spoofing, admin unlock/master gate) have been moved out of open issues into [Production Incident History](#19-production-incident-history) and [Recent Changes](#24-recent-changes).*
