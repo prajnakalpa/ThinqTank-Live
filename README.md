@@ -25,6 +25,13 @@ A competitive, timed quiz platform. Students sign in with a one-time email code,
 13. [Development Workflow](#13-development-workflow)
 14. [Future Improvements](#14-future-improvements)
 15. [Known Issues](#15-known-issues)
+16. [Critical Files Guide](#16-critical-files-guide)
+17. [Architecture Decision Record (ADR)](#17-architecture-decision-record-adr)
+18. [Data Lifecycle](#18-data-lifecycle)
+19. [Production Incident History](#19-production-incident-history)
+20. [Backup & Recovery](#20-backup--recovery)
+21. [Release Checklist](#21-release-checklist)
+22. [Ownership & Access Matrix](#22-ownership--access-matrix)
 
 ---
 
@@ -495,6 +502,15 @@ See [5.6](#56-how-to-add-a-new-admin). Person logs in once via OTP, then `update
 - **Corrupted leaderboard:** Recalculate, or delete an offending submission (rebuilds automatically).
 - **Stuck "score 0 forever":** ensure the submit path uses service-role reads (it does in current code) and that `answers` parsed correctly.
 
+### Roll back a bad deploy
+1. Vercel → Deployments → locate the last known-good production build → **Promote to Production** (instant rollback; no rebuild).
+2. If the bad deploy also ran a Supabase migration, roll the schema back separately (Vercel rollback does **not** revert the database).
+3. Confirm env vars on the promoted build match expectations before announcing recovery.
+
+### Emergency: locked out of admin
+- If the master gate or a code bug blocks all admins, access is still possible because authorization is data-driven: confirm the account's `users.role='admin'` directly in Supabase, and if the master gate is the blocker, temporarily unset `ADMIN_MASTER_PASSWORD` in Vercel and redeploy (this disables the master gate per `verify-master` logic). Re-enable afterward.
+- Never delete RLS policies or the `is_admin()` function to regain access — that exposes the whole database. Prefer the env-var route above.
+
 ---
 
 ## 12. Security Notes
@@ -511,6 +527,18 @@ Three-tier Supabase access (anon browser / anon server-with-cookies / service-ro
 
 ### Admin privilege model
 Single binary role, no granular permissions. Acceptable at current scale (one admin), but any move to multiple staff with different capabilities will need a real roles/permissions design.
+
+### Security Findings Priority
+Findings from the audit, ranked by severity. "Exploitability" reflects how easily a finding can be triggered today.
+
+| Pri | Finding | Impact | Exploitability | Recommended fix | Files / policies |
+|---|---|---|---|---|---|
+| **Critical** | `users_self_update` has no `WITH CHECK` | Any authenticated student can self-promote to `admin` and gain full admin + service-equivalent data access | High — single authenticated PostgREST `UPDATE` on own row | Add `WITH CHECK` forbidding `role` change; restrict role mutation to an admin/service path | RLS policy `users_self_update` on `public.users` |
+| **High** | `/api/quiz/log-event` is unauthenticated | Anyone can insert `quiz_logs` for any `submissionId`, inflating `cheat_violations`/`cheat_flag` and falsely flagging students (integrity/data-trust) | High — unauthenticated `POST` | Require `getUser()`; verify the submission belongs to the caller; validate `type` | `app/api/quiz/log-event/route.ts`, table `quiz_logs` |
+| **Medium** | Master cookie not revoked on sign-out; `path=/admin`; plain `!==` compare | Lingering 8h admin access after logout; timing side-channel on password compare | Medium — requires prior valid master unlock or local cookie access | Clear `admin_master_verified` on sign-out; constant-time compare; reconsider scope | `app/api/admin/verify-master/route.ts`, sign-out handler in `components/layout/Navbar.tsx` |
+| **Medium** | Master/admin gate logic bugs (see Known Issues #1–2) | Admin area can loop or refuse legitimate access; "bypass" label misleads operators | Medium — functional, not directly an attacker vector | Apply the two-file patch; align UI copy to chosen model | `middleware.ts`, `app/admin/layout.tsx` |
+| **Low** | `analytics` / `leaderboard` world-readable (`SELECT true`) | Public exposure of aggregate/ranking data (currently intended) | Low — by design | Re-evaluate before adding any sensitive column to these tables | RLS `analytics_public`, `leaderboard_public` |
+| **Low** | `NEXT_PUBLIC_*` secrets risk | Accidentally prefixing a secret with `NEXT_PUBLIC_` would inline it into the browser bundle | Low — process discipline | Code review check; never prefix `SERVICE_ROLE_KEY`/`ADMIN_MASTER_PASSWORD` | Env var setup, `lib/supabase/admin.ts` |
 
 ---
 
@@ -579,6 +607,245 @@ Push to the production branch (or merge a PR) → Vercel builds with `next build
 3. **Master cookie persistence.** `admin_master_verified` (8h) is not cleared on sign-out and is path-scoped to `/admin`.
 
 A minimal two-file patch (middleware + admin layout) resolves issues 1 and 2 without changing the architecture or weakening RLS. Coordinate the intended security model (break-glass vs. second factor) before applying.
+
+> **Active vs. resolved:** the three items above are *active* in the audited code. Several other defects (silent zero scores, admin unable to see answers, password-reset redirect path) have already been **resolved** and are preserved as institutional memory in [Production Incident History](#19-production-incident-history) so they are not reintroduced.
+
+---
+
+## 16. Critical Files Guide
+
+The files most likely to cause outages or security incidents if edited carelessly. "When to edit" / "Common mistakes" are derived from the current code and the incident history.
+
+### `middleware.ts`
+- **Purpose:** Runs on (almost) every request; refreshes the Supabase session token and is meant to expose the request pathname to layouts.
+- **Why it matters:** It is the single choke point keeping auth cookies fresh at the edge. A mistake here breaks auth for the entire site, not one page.
+- **When to edit:** Only to adjust the cookie/session plumbing, the `matcher`, or to correctly forward request headers (e.g., `x-pathname`).
+- **Common mistakes:** Adding logic between `createServerClient` and `getUser()` (breaks refresh); returning a *new* `NextResponse` instead of the `supabaseResponse` that holds refreshed cookies (logs users out intermittently); setting `x-pathname` on the **response** and expecting `headers()` to read it (it can't — see Incident #2).
+
+### `app/admin/layout.tsx`
+- **Purpose:** Server-side gate for the entire admin area: session → role → master-password.
+- **Why it matters:** It is the authorization boundary for all admin pages. Errors either lock out real admins or expose admin UI.
+- **When to edit:** To change the admin gating model (e.g., master-as-second-factor vs. break-glass) or fix the gate-ordering bug.
+- **Common mistakes:** Ordering the `getUser()` redirect before the master-cookie check (makes master-only access impossible — Incident #3); reading `x-pathname` while middleware sets it wrong (causes the `/admin/unlock` loop — Incident #1); removing the role check "to make it work."
+
+### `app/api/quiz/submit/route.ts`
+- **Purpose:** Authoritative scoring endpoint; persists results and rebuilds leaderboard + analytics. Idempotent.
+- **Why it matters:** It owns score correctness and the integrity of every leaderboard. Subtle bugs here corrupt results silently.
+- **When to edit:** To change scoring persistence, idempotency, or the leaderboard/analytics rebuild.
+- **Common mistakes:** Using `final_score != null` for the "already scored" check (it defaults to `0` → caches a permanent zero — Incident #4); reading `answers` without `parseJsonField` (TEXT/JSON — Incident #5); switching question reads from the **service-role** client to an RLS-bound client (questions vanish once an activity isn't `live` → zero scores — Incident #6); making the leaderboard/analytics rebuild block the response (they are intentionally non-critical/try-catch).
+
+### `lib/evaluation.ts`
+- **Purpose:** Pure scoring engine — normalization, exact/word/phonetic matching by strictness, MCQ handling.
+- **Why it matters:** Every score in the system flows through it; it's deterministic and must stay stable so re-scores reproduce.
+- **When to edit:** To tune matching strictness, add a question type, or fix a grading edge case.
+- **Common mistakes:** Changing `normalize()` semantics without re-running **Recalculate** (old and new scores diverge); assuming MCQ answers are option text (they are string **indices**); breaking purity by reaching for I/O or globals (it must remain side-effect-free and unit-testable).
+
+### `lib/supabase/admin.ts`
+- **Purpose:** Constructs the **service-role** client that bypasses RLS.
+- **Why it matters:** This key is god-mode over the database. Any leak is a full compromise.
+- **When to edit:** Almost never; only to adjust client options (`autoRefreshToken`/`persistSession` are intentionally off).
+- **Common mistakes:** Importing it into a client component or any `'use client'` path (leaks the key to the browser); prefixing the key with `NEXT_PUBLIC_`; using it where an RLS-bound client should enforce per-user access.
+
+### `app/api/admin/*` (`verify-master`, `recalculate`, `import-scores`, `delete-submission`)
+- **Purpose:** Privileged admin operations.
+- **Why it matters:** They perform service-role writes; their auth check is the only thing standing between a normal user and destructive operations.
+- **When to edit:** To add/modify admin operations.
+- **Common mistakes:** Forgetting the `getUser()` + `role==='admin'` guard at the top (every route except `verify-master`, which is gated by the password itself, must keep it); trusting client-provided `activityId`/`id` without existence checks; doing destructive writes before the role check.
+
+### `app/(auth)/login/page.tsx`
+- **Purpose:** The three sign-in modes (OTP, admin password, master) and their redirects.
+- **Why it matters:** First touchpoint for every user; the master tab feeds the admin gate.
+- **When to edit:** To change login UX, redirect targets, or the master-unlock call.
+- **Common mistakes:** Editing the "Bypasses Supabase auth" copy without aligning the actual gate (Incident #3); changing `redirectTo` defaults without checking the admin layout's expectations; removing the post-login `router.refresh()` (stale auth state in client components).
+
+---
+
+## 17. Architecture Decision Record (ADR)
+
+Decisions below are supported by repository/database evidence. Where intent is inferred from code rather than an explicit document, it is labelled.
+
+- **ADR-1 — Supabase as the single backend.** *Evidence:* `@supabase/ssr` + `@supabase/supabase-js`, no separate API service, Vercel↔Supabase Connected App, org-managed project. *Decision:* use Supabase for Postgres + Auth + Storage so a small team ships a full app without running servers. *Trade-off:* couples auth, data, and RLS to one vendor; RLS becomes the core security model.
+- **ADR-2 — Roles live in `public.users.role`.** *Evidence:* `role` column with check constraint; `is_admin()` reads it; no JWT/`app_meta` claims set. *Decision:* keep authorization data in app-owned Postgres, queryable by RLS and joins, instead of auth custom claims. *Trade-off:* a DB read per authorization (mitigated by `is_admin()` `SECURITY DEFINER`); future scale may favor a JWT claim.
+- **ADR-3 — Service-role client for scoring.** *Evidence:* in-code comments in `quiz/submit` explaining that RLS-bound nested joins returned `[]` and scored 0; questions readable publicly only while `live`. *Decision:* score with a service-role client that bypasses RLS so results are correct regardless of activity status. *Trade-off:* concentrates trust in server routes; the key must never reach the client.
+- **ADR-4 — `activities` and `quizzes` are separate (1:1).** *Evidence:* distinct tables, `quizzes.activity_id` unique FK, timing/`duration` on `quizzes`, lifecycle/`status`/`visibility` on `activities`. *Decision:* separate the "event/listing" concern (status, visibility, ordering) from the "quiz mechanics" concern (timing, duration, questions). *Trade-off:* an extra join; gains flexibility to evolve quiz config or support other activity types without reworking listings.
+- **ADR-5 — Master-password break-glass.** *Evidence:* `ADMIN_MASTER_PASSWORD`, `verify-master` route, `admin_master_verified` cookie, dedicated `/admin/unlock`, login "Master" tab. *Decision:* provide an env-controlled emergency/secondary admin entry independent of a specific Supabase identity. *Trade-off:* a second auth path to keep correct and audited; currently under-specified (see Incidents/Known Issues).
+- **ADR-6 — TEXT columns holding JSON for `answers` / `time_per_question`.** *Evidence:* repeated `parseJsonField` helpers and comments. *Decision (likely historical/incidental):* store flexible answer maps as TEXT. *Trade-off:* requires parse-everywhere discipline and caused real bugs; `jsonb` is the recommended migration (Future Improvements).
+- **ADR-7 — Rebuild-on-write leaderboard/analytics.** *Evidence:* `rebuildLeaderboard`/`updateAnalytics` invoked from submit/recalculate/delete, upsert on `(activity_id,user_id)`. *Decision:* recompute aggregates synchronously on each scoring write for simplicity and immediate consistency. *Trade-off:* fine at current scale; high concurrency would favor incremental updates or Realtime.
+- **ADR-8 — `is_admin()` as `SECURITY DEFINER`.** *Evidence:* function definition. *Decision:* let the policy helper read `users` without tripping that table's own RLS (prevents recursion). *Trade-off:* definer functions must be written carefully to avoid privilege leaks.
+
+---
+
+## 18. Data Lifecycle
+
+Entity-by-entity create→update→read→delete and dependencies. "Owner" = who normally performs the action.
+
+- **User** — *Create:* upsert into `public.users` on first OTP verify (`role='student'`). *Update:* username set once then `username_locked=true`; role changed by admin/SQL. *Read:* self (RLS) + admins; Navbar/role checks. *Delete:* not done in app; deleting `auth.users` should cascade/orphan the profile — handle manually. *Depends on:* `auth.users` (1:1).
+- **Activity** — *Create:* admin (`/admin/activities/new`). *Update:* admin edits `status`/`visibility`/details; `status` drives quiz availability and question RLS. *Read:* public when `visibility='public'`; admins always. *Delete:* admin delete; orphans quizzes/questions/submissions/leaderboard/analytics — clean up or cascade intentionally. *Depends on:* `users.created_by`.
+- **Quiz** — *Create:* with/after its activity (1:1). *Update:* timing/duration via admin. *Read:* public read allowed; questions linked through it. *Delete:* tied to activity lifecycle. *Depends on:* `activities` (unique FK).
+- **Question** — *Create:* admin editor or XLSX import. *Update:* admin edits text/answers/keywords/strictness/options. *Read:* admins always; public only while parent activity `live` (RLS); scoring reads via service role. *Delete:* admin delete from editor. *Depends on:* `quizzes.quiz_id`.
+- **Submission** — *Create:* student attempt row (`submissions_insert_own`, `user_id=auth.uid()`). *Update:* during attempt and by `quiz/submit` (answers/scores/flags); admin override sets `score_overridden`. *Read:* owner or admin. *Delete:* admin via `delete-submission` (triggers leaderboard rebuild). *Depends on:* `activities`, `users`, `questions` (for scoring), `quiz_logs` (for cheat count).
+- **Leaderboard** — *Create/Update:* upserted by rebuild on submit/recalculate/delete, keyed `(activity_id,user_id)`. *Read:* public. *Delete:* per-row on submission delete, then rebuilt. *Depends on:* `submissions` (derived/denormalized).
+- **Analytics** — *Create/Update:* `updateAnalytics` on submit/recalculate (1:1 per activity). *Read:* public + admin question/analytics views. *Delete:* tied to activity. *Depends on:* `submissions` (aggregated).
+- **Announcement** — *Create/Update/Delete:* admin CRUD. *Read:* public only when `published=true`; admins always. *Depends on:* `users.created_by`.
+
+Cascade caution: deleting an **Activity** has the widest blast radius (quizzes → questions → submissions → leaderboard → analytics). Confirm intended cleanup before deleting activities in production.
+
+---
+
+## 19. Production Incident History
+
+Verified from in-code comments, fix markers, and current logic. Preserved so resolved bugs are not reintroduced.
+
+### Incident #1 — Admin unlock redirect loop
+- **Symptoms:** `/admin/unlock` redirects to itself; admins can't reach the unlock form.
+- **Root cause:** The unlock-page self-exemption depends on `x-pathname`, which is always empty (see #2), so the guard never matches.
+- **Resolution:** Pending — forward `x-pathname` correctly (see #2 fix). *(Active — Known Issues #1.)*
+- **Files:** `middleware.ts`, `app/admin/layout.tsx`.
+
+### Incident #2 — `x-pathname` middleware bug
+- **Symptoms:** Layout logic that branches on the current path never triggers.
+- **Root cause:** Middleware sets `x-pathname` on the **response**; `headers()` in a Server Component reads **request** headers, so the value is never visible.
+- **Resolution:** Pending — set it as a request header via `NextResponse.next({ request: { headers } })`. *(Active — Known Issues #1.)*
+- **Files:** `middleware.ts`.
+
+### Incident #3 — Master-password flow can't unlock
+- **Symptoms:** Correct master password "reloads" back to login; master-only access impossible.
+- **Root cause:** `app/admin/layout.tsx` enforces `getUser()`+role before consulting `admin_master_verified`, so a master-only visitor is bounced to `/login`. UI copy ("Bypasses Supabase auth") disagrees with behavior.
+- **Resolution:** Pending — accept the master cookie as a valid gate, or define it as a true second factor and fix copy. *(Active — Known Issues #2.)*
+- **Files:** `app/admin/layout.tsx`, `app/(auth)/login/page.tsx`, `app/api/admin/verify-master/route.ts`.
+
+### Incident #4 — Permanent zero score ("cached 0 forever")
+- **Symptoms:** First submit returns score 0 and never re-scores.
+- **Root cause:** Idempotency check used `final_score != null`, but `final_score` has a DB **default of 0**, so brand-new rows looked "already scored."
+- **Resolution:** ✅ Fixed — check `is_complete && auto_score != null` (`auto_score` is null until evaluation runs).
+- **Files:** `app/api/quiz/submit/route.ts`.
+
+### Incident #5 — JSON TEXT parsing issues
+- **Symptoms:** Scores of 0 and "admin can't see answers"; answers appeared empty.
+- **Root cause:** `answers` / `time_per_question` are **TEXT** columns holding JSON strings; consumers used them as objects.
+- **Resolution:** ✅ Fixed — `parseJsonField` helper applied in submit, recalculate, quiz results, and admin submissions views.
+- **Files:** `app/api/quiz/submit/route.ts`, `app/api/admin/recalculate/route.ts`, `app/quiz/[id]/page.tsx`, `app/admin/submissions/[quizId]/page.tsx`.
+
+### Incident #6 — Nested-join scoring returned no questions
+- **Symptoms:** `evaluateSubmission` scored 0 on first submit while Recalculate worked.
+- **Root cause:** A 3-level nested join (`submissions→activities→quizzes→questions`) returned `[]` whenever RLS blocked an intermediate table (questions are public only while `live`).
+- **Resolution:** ✅ Fixed — fetch questions with a direct flat query via the **service-role** client.
+- **Files:** `app/api/quiz/submit/route.ts`.
+
+### Incident #7 — Password-reset redirect path
+- **Symptoms:** Reset links failed / hit the wrong URL.
+- **Root cause:** The callback handler lives in route group `(auth)`, which does **not** appear in the URL — the real path is `/callback`, not `/auth/callback`.
+- **Resolution:** ✅ Fixed — `redirectTo = ${getURL()}callback?type=recovery`; `getURL()` centralizes origin resolution.
+- **Files:** `app/(auth)/reset-password/page.tsx`, `app/(auth)/callback/route.ts`, `lib/utils.ts`.
+
+### Incident #8 — Case-sensitive CSV score import
+- **Symptoms:** Some emails didn't match during score import.
+- **Root cause:** Exact email comparison missed case differences.
+- **Resolution:** ✅ Fixed — normalize emails and match with `ilike`.
+- **Files:** `app/api/admin/import-scores/route.ts`.
+
+### Incident #9 — Admin sidebar mobile layout
+- **Symptoms:** Sidebar always visible / content offset on mobile; hydration mismatch.
+- **Root cause:** Inline `left`/`marginLeft` styles couldn't be overridden by CSS media queries.
+- **Resolution:** ✅ Fixed — CSS-class-controlled positioning; identical SSR/client render.
+- **Files:** `app/admin/layout.tsx`, `components/admin/AdminSidebar.tsx`, `app/globals.css`.
+
+---
+
+## 20. Backup & Recovery
+
+> Procedures are labelled **Verified** (from repo/DB) or **Inferred** (standard Supabase/Vercel practice — confirm before relying on them in an emergency).
+
+### Database backups
+- **Inferred:** Supabase provides automated daily backups / PITR depending on plan tier. **Confirm the plan, retention window, and PITR availability in the Supabase dashboard** — *Not verified from available sources.*
+- **Verified action available:** ad-hoc logical dump via `pg_dump` against the DB host (`db.mhhscvmypriujtoorgap.supabase.co`) using the DB password. Store dumps encrypted off-platform.
+- Take a manual snapshot/dump before any destructive migration or bulk score operation.
+
+### Secret rotation process
+1. Rotate in source of truth (Supabase → Settings → API for keys; choose a new `ADMIN_MASTER_PASSWORD`).
+2. Update the matching Vercel env vars across Production/Preview/Development.
+3. **Redeploy** so values take effect (mandatory for `NEXT_PUBLIC_*`).
+4. Invalidate lingering sessions if needed (master cookie has no server revocation today).
+5. Treat a leaked `SUPABASE_SERVICE_ROLE_KEY` as a full compromise → rotate immediately and audit access.
+
+### Disaster recovery steps
+1. **Assess scope:** app down, DB data loss, or secret leak?
+2. **App/code:** redeploy a known-good commit, or Vercel **Promote to Production** on a healthy build.
+3. **Data:** restore from the latest Supabase backup/PITR (confirm capability first); for partial corruption, restore the affected tables or rebuild derived data (leaderboard/analytics via **Recalculate**).
+4. **Secrets:** rotate and redeploy if a leak is suspected.
+5. **Verify:** run the [Release Checklist](#21-release-checklist).
+
+### Environment recovery checklist
+- [ ] `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` present and correct in the target environment.
+- [ ] `ADMIN_MASTER_PASSWORD` set (or intentionally unset to disable the gate).
+- [ ] `NEXT_PUBLIC_SITE_URL` matches the deployment origin; Supabase redirect allow-list includes `<origin>/callback`.
+- [ ] Storage bucket `assets` exists and is public.
+- [ ] At least one row in `public.users` with `role='admin'`.
+
+### Minimum requirements to rebuild production from scratch
+1. **Supabase project** (Postgres 17) with: all `public` tables + columns (Section 10), `is_admin()` `SECURITY DEFINER` function, every RLS policy from Section 5.3, and the public `assets` bucket. *(No migration files exist in the repo — schema must be recreated from this document or an existing dump; see Gaps.)*
+2. **Auth config:** email provider enabled (OTP + password + recovery), redirect URLs allow-listed.
+3. **Vercel project** linked to the repo with all env vars (Section 7).
+4. **One admin user:** sign in via OTP, then `update public.users set role='admin' where email='…'`.
+5. **Deploy** (`next build`) and run the Release Checklist.
+
+---
+
+## 21. Release Checklist
+
+Run before promoting to production.
+
+**Build**
+- [ ] `npm run build` succeeds locally with no type errors.
+- [ ] No secret accidentally prefixed `NEXT_PUBLIC_`.
+- [ ] `vercel.json` `no-store` on `/api/*` still present.
+
+**Environment variables**
+- [ ] All Section 7 vars set for the target environment; `NEXT_PUBLIC_*` changes followed by a redeploy.
+- [ ] `NEXT_PUBLIC_SITE_URL` correct for the environment.
+
+**Supabase**
+- [ ] RLS enabled on all `public` tables; policies match Section 5.3.
+- [ ] `is_admin()` present and `SECURITY DEFINER`.
+- [ ] Redirect allow-list includes `<origin>/callback`.
+- [ ] (If addressed) `users_self_update` has a `WITH CHECK` blocking role escalation.
+
+**Auth**
+- [ ] OTP login: code arrives, verifies, profile upserted.
+- [ ] Admin password login routes to `/admin`.
+- [ ] Password reset: link → `/callback` → `/update-password`.
+
+**Admin**
+- [ ] Admin can reach `/admin` (and master gate behaves per chosen model — see Known Issues).
+- [ ] Non-admin is redirected away from `/admin`.
+- [ ] Admin API routes reject non-admins (401/403).
+
+**Quiz flow**
+- [ ] Start a `live` quiz, answer, submit → non-zero score persists.
+- [ ] Re-submit is idempotent (no double scoring).
+- [ ] Cheat events log; `cheat_flag` sets at ≥6.
+
+**Leaderboard / analytics**
+- [ ] Leaderboard updates immediately after submit.
+- [ ] Recalculate rebuilds scores + ranks.
+- [ ] Deleting a submission rebuilds the leaderboard.
+
+---
+
+## 22. Ownership & Access Matrix
+
+Who owns/administers each asset and where access is managed. Specific account holders are **Not verified from available sources** — fill in during handover.
+
+| Asset | What it controls | Where managed | Owner / access holders |
+|---|---|---|---|
+| **GitHub** | Source of truth; triggers Vercel deploys | GitHub repo settings | Not verified from available sources |
+| **Vercel** | Hosting, builds, env vars, domains, rollbacks | Vercel project (linked org `vercel_icfg_aspNR4TSYLQ3h0QomW0YRd8l`) | Not verified from available sources |
+| **Supabase** | Postgres, Auth, Storage, RLS, keys | Project `ThinkTanq Live` (`mhhscvmypriujtoorgap`, `ap-south-1`) | Not verified from available sources |
+| **Domain** | Public URL / DNS | Current prod URL is `thinqtanklive.vercel.app`; `thinqtank.co.in` appears in `next.config.mjs` image allow-list (custom domain? **Not verified**) | Not verified from available sources |
+| **Storage** | Public `assets` bucket (logos/images) | Supabase Storage | Supabase admins (above) |
+| **Environment Variables** | Runtime secrets/config | Vercel project settings (per environment) | Vercel admins (above) |
+| **Authentication** | User identities, OTP/password, recovery | Supabase Auth | Supabase admins (above) |
+| **App Admin role** | In-app admin capabilities | `public.users.role='admin'` (currently 1 account) | The single admin account on record |
 
 ---
 
