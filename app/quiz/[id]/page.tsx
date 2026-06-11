@@ -266,6 +266,14 @@ export default function QuizPage({ params }: Props) {
     )
     setQuestions(qs)
 
+    const { data: an } = await supabase
+      .from('analytics').select('question_stats').eq('activity_id', params.id).single()
+    const aStats = Array.isArray(an?.question_stats) ? an!.question_stats : []
+    setQStats(Object.fromEntries(
+      aStats.filter((s: any) => s?.question_id).map((s: any) => [s.question_id, s])
+    ))
+    
+
     const { data: existingSub } = await supabase
       .from('submissions')
       .select('*')
@@ -619,6 +627,7 @@ export default function QuizPage({ params }: Props) {
                   const isCorrect    = checkIsCorrect(qItem, rawAnswer)
                   const notAnswered  = !rawAnswer && rawAnswer !== '0'
                   const timeSpent    = timeMap[qItem.id] ?? 0
+                  const qStat        = qStats[qItem.id]
 
                   const borderLeft = notAnswered
                     ? '3px solid rgba(245,158,11,0.5)'
