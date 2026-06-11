@@ -652,6 +652,7 @@ export default function QuizPage({ params }: Props) {
           {/* ── Per-question breakdown ── */}
           {hasBreakdown ? (
             <>
+              <PeerBenchmark activityId={params.id} yourScore={submission?.final_score ?? null} />
               <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
                 Question Breakdown
               </p>
