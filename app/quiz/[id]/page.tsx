@@ -48,6 +48,43 @@ function checkIsCorrect(q: any, rawAnswer: string | undefined): boolean {
   }
 }
 
+function PeerBenchmark({ activityId, yourScore }: { activityId: string; yourScore: number | null }) {
+  const [rows, setRows] = useState<number[] | null>(null)
+  useEffect(() => {
+    const sb = createClient()
+    sb.from('leaderboard').select('score').eq('activity_id', activityId).then(({ data }) => {
+      setRows((data ?? []).map((r: any) => r.score).filter((n: any) => typeof n === 'number'))
+    })
+  }, [activityId])
+
+  if (yourScore == null || !rows || rows.length === 0) return null
+  const total  = rows.length
+  const avg    = Math.round(rows.reduce((a, b) => a + b, 0) / total)
+  const beaten = rows.filter(s => s < yourScore).length
+  const pct    = total === 1 ? 100 : Math.round((beaten / total) * 100)
+  const sorted = [...rows].sort((a, b) => b - a)
+  const top10  = sorted[Math.max(0, Math.ceil(total * 0.1) - 1)]
+
+  const pill = (label: string, value: string, c = '#e2e8f0') => (
+    <div style={{ flex: '1 1 120px', background: 'rgba(255,255,255,0.03)',
+      border: '1px solid rgba(148,163,184,0.08)', borderRadius: 10, padding: '10px 14px' }}>
+      <p style={{ color: '#475569', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</p>
+      <p style={{ color: c, fontSize: '1.05rem', fontWeight: 700 }}>{value}</p>
+    </div>
+  )
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <p style={{ color: '#475569', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Peer Benchmark</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {pill('Average Score', String(avg))}
+        {pill('Your Percentile', `${pct}%`, '#818cf8')}
+        {pill('Participants Beaten', `${beaten} / ${total}`, '#4ade80')}
+        {pill('Top 10% Score', String(top10), '#f59e0b')}
+      </div>
+    </div>
+  )
+}
+
 function QTime({ you, stat }: { you?: number; stat?: any }) {
   if (you == null && !stat) return null
   const acc = stat?.accuracy ?? null
