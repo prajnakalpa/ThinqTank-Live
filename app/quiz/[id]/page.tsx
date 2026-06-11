@@ -48,6 +48,27 @@ function checkIsCorrect(q: any, rawAnswer: string | undefined): boolean {
   }
 }
 
+function QTime({ you, stat }: { you?: number; stat?: any }) {
+  if (you == null && !stat) return null
+  const acc = stat?.accuracy ?? null
+  const diff = acc == null ? null
+    : acc >= 70 ? { l: '🟢 Easy', c: '#4ade80' }
+    : acc >= 40 ? { l: '🟡 Medium', c: '#fbbf24' }
+    : { l: '🔴 Hard', c: '#f87171' }
+  const pill = (t: string, c = '#64748b') => (
+    <span style={{ color: c, fontSize: '0.72rem', background: 'rgba(255,255,255,0.04)',
+      border: '1px solid rgba(148,163,184,0.08)', borderRadius: 5, padding: '2px 7px' }}>{t}</span>
+  )
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+      {pill(`You: ${you != null ? Math.round(you) : '—'} sec`, '#818cf8')}
+      {stat?.avg_time != null && pill(`Average: ${Math.round(stat.avg_time)} sec`)}
+      {acc != null && pill(`${Math.round(acc)}% correct`, acc >= 70 ? '#4ade80' : acc >= 40 ? '#fbbf24' : '#f87171')}
+      {diff && pill(diff.l, diff.c)}
+    </div>
+  )
+}
+
 /**
  * Safely parse a TEXT column that might be a JSON string or already an object.
  * The answers and time_per_question columns in Supabase are TEXT, so when
