@@ -95,6 +95,7 @@ export default function QuizPage({ params }: Props) {
   const [currentQ,      setCurrentQ]      = useState(0)
   const [newUsername,   setNewUsername]   = useState('')
   const [usernameError, setUsernameError] = useState('')
+  const [qStats, setQStats] = useState<Record<string, any>>({})
 
   const router   = useRouter()
   // Stable Supabase client — must not be recreated on every render
