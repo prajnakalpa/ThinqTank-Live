@@ -679,6 +679,7 @@ export default function QuizPage({ params }: Props) {
                             fontFamily: 'monospace',
                           }}>
                             ⏱ {timeSpent}s
+                            <QTime you={timeMap[qItem.id]} stat={qStat} />
                           </span>
                         </div>
                       </div>
